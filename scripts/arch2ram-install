@@ -135,11 +135,13 @@ if [[ "$MODE" == "batocera" ]]; then
     echo "Home UUID: ${BATOCERA_HOME_UUID}"
     echo ""
 
+    HOME_DEV=$(findmnt -n -o SOURCE /home 2>/dev/null || echo "/dev/sda4")
     INIT_TMP="/tmp/batocera-init-patched"
     sed \
-        -e "s|UUID=REPLACE_WITH_HOME_UUID|${BATOCERA_HOME_UUID}|" \
-        -e "s|IMG_FILE=\"/Guy008/batocera-ram/batocera.img\"|IMG_FILE=\"${IMG_FILE_ON_PARTITION}\"|" \
+        -e "s|REPLACE_WITH_HOME_DEV|${HOME_DEV}|" \
+        -e "s|REPLACE_WITH_IMG_FILE|${IMG_FILE_ON_PARTITION}|" \
         "${INITRD_SRC}/init-batocera" > "$INIT_TMP"
+    echo "    Device: ${HOME_DEV}, Image: ${IMG_FILE_ON_PARTITION}"
     chmod +x "$INIT_TMP"
 
     copy_kernel

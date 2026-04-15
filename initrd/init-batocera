@@ -9,13 +9,10 @@
 #   4. Sets up overlayfs (writes go to RAM tmpfs)
 #   5. switch_root into Batocera
 
-# --- CONFIGURATION ---
-# Partition containing batocera.img (UUID of your /home or wherever you stored it)
-IMG_SRC_UUID="REPLACE_WITH_HOME_UUID"
+# --- CONFIGURATION (patched by arch2ram-install) ---
+IMG_SRC_DEV="REPLACE_WITH_HOME_DEV"
 IMG_SRC_FSTYPE="btrfs"
-
-# Path to the .img file on that partition
-IMG_FILE="/Guy008/batocera-ram/batocera.img"
+IMG_FILE="REPLACE_WITH_IMG_FILE"
 
 # Offset of the FAT32 (BATOCERA) partition inside the .img
 # Batocera v42: partition 1 starts at sector 2048, sector size 512
@@ -40,9 +37,8 @@ mount -t proc  proc  /proc  || fail "proc"
 mount -t sysfs sysfs /sys   || fail "sysfs"
 mount -t devtmpfs dev /dev  || fail "devtmpfs"
 
-echo "[1/6] Mounting source partition (${IMG_SRC_FSTYPE}, UUID=${IMG_SRC_UUID})..."
-IMG_SRC_DEV=$(blkid -U "${IMG_SRC_UUID}" 2>/dev/null) || fail "UUID not found: ${IMG_SRC_UUID}"
-mount -o ro -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || fail "source partition mount (${IMG_SRC_DEV})"
+echo "[1/6] Mounting source partition (${IMG_SRC_DEV})..."
+mount -o ro -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || fail "mount ${IMG_SRC_DEV} failed"
 
 echo "[2/6] Setting up loop device on batocera.img (FAT partition at offset ${FAT_OFFSET})..."
 losetup -o ${FAT_OFFSET} /dev/loop0 /img_src${IMG_FILE} || fail "losetup on batocera.img"
