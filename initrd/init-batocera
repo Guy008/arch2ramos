@@ -40,8 +40,9 @@ mount -t proc  proc  /proc  || fail "proc"
 mount -t sysfs sysfs /sys   || fail "sysfs"
 mount -t devtmpfs dev /dev  || fail "devtmpfs"
 
-echo "[1/6] Mounting source partition (${IMG_SRC_FSTYPE})..."
-mount -o ro -t ${IMG_SRC_FSTYPE} -U ${IMG_SRC_UUID} /img_src || fail "source partition (check UUID)"
+echo "[1/6] Mounting source partition (${IMG_SRC_FSTYPE}, UUID=${IMG_SRC_UUID})..."
+IMG_SRC_DEV=$(blkid -U "${IMG_SRC_UUID}" 2>/dev/null) || fail "UUID not found: ${IMG_SRC_UUID}"
+mount -o ro -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || fail "source partition mount (${IMG_SRC_DEV})"
 
 echo "[2/6] Setting up loop device on batocera.img (FAT partition at offset ${FAT_OFFSET})..."
 losetup -o ${FAT_OFFSET} /dev/loop0 /img_src${IMG_FILE} || fail "losetup on batocera.img"

@@ -23,7 +23,8 @@ mount -t sysfs sysfs /sys   || fail "sysfs mount"
 mount -t devtmpfs dev /dev  || fail "devtmpfs mount"
 
 echo "[1/5] Mounting source partition..."
-mount -o ro -t ext4 "$SQUASHFS_DEV" /img_src || fail "source partition mount (UUID correct?)"
+SRC_DEV=$(blkid -U "${SQUASHFS_DEV#UUID=}" 2>/dev/null) || fail "UUID not found: ${SQUASHFS_DEV}"
+mount -o ro -t ext4 "${SRC_DEV}" /img_src || fail "source partition mount (${SRC_DEV})"
 
 echo "[2/5] Mounting squashfs from RAM image..."
 mount -t squashfs -o loop /img_src/${SQUASHFS_PATH} /squash_base || fail "squashfs mount"
