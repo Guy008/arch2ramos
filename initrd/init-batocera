@@ -14,10 +14,11 @@ IMG_SRC_DEV="REPLACE_WITH_HOME_DEV"
 IMG_SRC_FSTYPE="btrfs"
 IMG_FILE="REPLACE_WITH_IMG_FILE"
 
-# Offset of the FAT32 (BATOCERA) partition inside the .img
-# Batocera v42: partition 1 starts at sector 2048, sector size 512
-# offset = 2048 * 512 = 1048576 bytes
+# Partition layout inside batocera.img (Batocera v42):
+#   Part 1 (FAT32/BATOCERA): sector 2048,      size 10G  → offset = 2048*512 = 1048576
+#   Part 2 (ext4/userdata):  sector 20973568,  size 512M → offset = 20973568*512 = 10738466816
 FAT_OFFSET="1048576"
+USERDATA_OFFSET="10738466816"
 
 OVERLAY_SIZE="512M"
 # --- END CONFIGURATION ---
@@ -46,7 +47,6 @@ for param in $(cat /proc/cmdline); do
         img_file=*)         IMG_FILE="${param#img_file=}" ;;
     esac
 done
-echo "      img_src_dev=${IMG_SRC_DEV} fstype=${IMG_SRC_FSTYPE}"
 
 echo "[0/6] Loading kernel modules..."
 KVER=$(uname -r)
@@ -59,8 +59,10 @@ mknod /dev/loop-control c 10 237 2>/dev/null || true
 echo "      loop-control: $(ls -la /dev/loop-control 2>&1)"
 
 echo "[1/6] Mounting source partition (${IMG_SRC_DEV})..."
-# btrfs: norecovery skips log replay so we can mount read-only even with dirty log
-mount -o ro,norecovery -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || \
+# Try rw first (real machine: allows journal replay + rw loop devices for userdata)
+# Fall back to ro,norecovery for VM testing (where drive is passed readonly)
+mount -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src 2>/dev/null || \
+mount -o ro,norecovery -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src 2>/dev/null || \
 mount -o ro -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || fail "mount ${IMG_SRC_DEV} failed"
 echo "    Looking for: /img_src${IMG_FILE}"
 ls /img_src${IMG_FILE} >/dev/null 2>&1 && echo "    FILE FOUND" || { echo "    FILE NOT FOUND (ls /img_src):"; ls /img_src 2>&1; }
@@ -81,8 +83,19 @@ echo "      loop dev: $(ls -la ${LOOP_DEV} 2>&1)"
 losetup -o ${FAT_OFFSET} "${LOOP_DEV}" /img_src${IMG_FILE} || fail "losetup on batocera.img"
 echo "      losetup OK: ${LOOP_DEV}"
 
-echo "[3/6] Mounting BATOCERA FAT partition..."
+echo "[3/6] Mounting BATOCERA FAT partition (→ /boot)..."
+# Mount rw so Batocera can write random seed, autoresize flag, etc.
+mount -t vfat "${LOOP_DEV}" /boot_root 2>/dev/null || \
 mount -o ro -t vfat "${LOOP_DEV}" /boot_root || fail "FAT BATOCERA mount"
+
+# Also set up userdata (partition 2 of the .img) via a second loop device
+LOOP_DEV2=$(losetup -f 2>/dev/null)
+if [ ! -e "${LOOP_DEV2}" ]; then
+    MINOR2="${LOOP_DEV2##*loop}"
+    mknod "${LOOP_DEV2}" b 7 "${MINOR2}"
+fi
+losetup -o ${USERDATA_OFFSET} "${LOOP_DEV2}" /img_src${IMG_FILE} || fail "losetup userdata"
+echo "      userdata loop: ${LOOP_DEV2}"
 
 echo "[4/6] Mounting Batocera squashfs..."
 mount -t squashfs -o ro /boot_root/boot/batocera /squash_base || fail "squashfs mount"
@@ -96,12 +109,17 @@ mount -t overlay overlay \
     /new_root || fail "overlayfs"
 
 echo "[6/6] Moving mounts and switching to Batocera root..."
+# Move /boot_root → /new_root/boot so Batocera can find batocera-boot.conf
+mount --move /boot_root /new_root/boot   || fail "move /boot"
+# Mount userdata partition → /new_root/userdata
+mount -t ext4 "${LOOP_DEV2}" /new_root/userdata 2>/dev/null || \
+    mount "${LOOP_DEV2}" /new_root/userdata 2>/dev/null || \
+    echo "      WARNING: userdata mount failed, Batocera will use RAM"
 mount --move /sys      /new_root/sys   2>/dev/null
 mount --move /proc     /new_root/proc  2>/dev/null
 mount --move /dev      /new_root/dev   2>/dev/null
 
-# Keep loop device alive: loop0 holds the img file open via fd
-# img_src can be unmounted — kernel keeps the fd
+# Unmount img_src — loop devices keep the file open via fd
 umount /img_src 2>/dev/null || true
 
 echo ""
