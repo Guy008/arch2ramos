@@ -1,0 +1,22 @@
+# arch2ramos GRUB entries
+# Add to /etc/grub.d/40_custom then run: sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+# --- Arch Linux from RAM ---
+menuentry "Arch Linux from RAM" --class arch --class gnu-linux --class os {
+    insmod fat
+    insmod part_gpt
+    set root='hd0,gpt1'
+    echo "Loading Arch from RAM..."
+    linux  /arch2ram-vmlinuz console=tty1 rdinit=/init quiet
+    initrd /arch2ram-initrd.gz
+}
+
+# --- Batocera from RAM ---
+menuentry "Batocera from RAM" --class batocera --class gnu-linux --class os {
+    insmod fat
+    insmod part_gpt
+    set root='hd0,gpt1'
+    echo "Loading Batocera from RAM..."
+    linux  /arch2ram-vmlinuz console=tty1 rdinit=/init quiet
+    initrd /batocera-ram-initrd.gz
+}

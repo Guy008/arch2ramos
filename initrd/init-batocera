@@ -1,0 +1,74 @@
+#!/bin/ash
+# arch2ramos - Batocera from RAM boot script
+#
+# Batocera stores its OS as a squashfs file inside a FAT32 partition
+# inside a .img file. This script:
+#   1. Mounts the partition containing batocera.img
+#   2. loop-mounts the FAT32 partition inside the image (offset=1048576)
+#   3. Mounts the squashfs from that partition
+#   4. Sets up overlayfs (writes go to RAM tmpfs)
+#   5. switch_root into Batocera
+
+# --- CONFIGURATION ---
+# Partition containing batocera.img (UUID of your /home or wherever you stored it)
+IMG_SRC_UUID="REPLACE_WITH_HOME_UUID"
+IMG_SRC_FSTYPE="btrfs"
+
+# Path to the .img file on that partition
+IMG_FILE="/Guy008/batocera-ram/batocera.img"
+
+# Offset of the FAT32 (BATOCERA) partition inside the .img
+# Batocera v42: partition 1 starts at sector 2048, sector size 512
+# offset = 2048 * 512 = 1048576 bytes
+FAT_OFFSET="1048576"
+
+OVERLAY_SIZE="512M"
+# --- END CONFIGURATION ---
+
+fail() {
+    echo ""
+    echo "!!! Batocera RAM boot failed: $1"
+    echo "!!! Dropping to emergency shell"
+    exec /bin/ash
+}
+
+echo ""
+echo "=== arch2ramos: booting Batocera from RAM ==="
+echo ""
+
+mount -t proc  proc  /proc  || fail "proc"
+mount -t sysfs sysfs /sys   || fail "sysfs"
+mount -t devtmpfs dev /dev  || fail "devtmpfs"
+
+echo "[1/6] Mounting source partition (${IMG_SRC_FSTYPE})..."
+mount -o ro -t ${IMG_SRC_FSTYPE} -U ${IMG_SRC_UUID} /img_src || fail "source partition (check UUID)"
+
+echo "[2/6] Setting up loop device on batocera.img (FAT partition at offset ${FAT_OFFSET})..."
+losetup -o ${FAT_OFFSET} /dev/loop0 /img_src${IMG_FILE} || fail "losetup on batocera.img"
+
+echo "[3/6] Mounting BATOCERA FAT partition..."
+mount -o ro -t vfat /dev/loop0 /boot_root || fail "FAT BATOCERA mount"
+
+echo "[4/6] Mounting Batocera squashfs..."
+mount -t squashfs -o ro /boot_root/boot/batocera /squash_base || fail "squashfs mount"
+
+echo "[5/6] Setting up overlayfs (writes → RAM)..."
+mount -t tmpfs -o size=${OVERLAY_SIZE} tmpfs /overlay_root || fail "overlay tmpfs"
+mkdir -p /overlay_root/upper /overlay_root/work
+
+mount -t overlay overlay \
+    -o rw,lowerdir=/squash_base,upperdir=/overlay_root/upper,workdir=/overlay_root/work \
+    /new_root || fail "overlayfs"
+
+echo "[6/6] Moving mounts and switching to Batocera root..."
+mount --move /sys      /new_root/sys   2>/dev/null
+mount --move /proc     /new_root/proc  2>/dev/null
+mount --move /dev      /new_root/dev   2>/dev/null
+
+# Keep loop device alive: loop0 holds the img file open via fd
+# img_src can be unmounted — kernel keeps the fd
+umount /img_src 2>/dev/null || true
+
+echo ""
+echo "=== Switching to Batocera ==="
+exec switch_root /new_root /sbin/init || fail "switch_root"
