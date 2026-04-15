@@ -22,10 +22,15 @@ EXCLUDES=(
     /lost+found
     /arch-ram.sfs
     /arch-ram.sfs.tmp
-    /home            # keep home on disk, not in RAM image
+    /home                       # keep home on disk
     /var/cache/pacman/pkg
     /var/log
     /var/tmp
+    /opt/cuda                   # GPU toolkit — too large, not needed in RAM
+    /opt/android-studio         # dev tool — not needed in RAM
+    /usr/share/locale           # ~850MB, keep only what's needed
+    /usr/share/doc              # documentation
+    /usr/lib/debug              # debug symbols
 )
 
 if [[ $EUID -ne 0 ]]; then
