@@ -100,7 +100,15 @@ GRUBEOF
 
 copy_kernel() {
     local KERNEL
-    KERNEL=$(ls /boot/vmlinuz-linux-zen /boot/vmlinuz-linux 2>/dev/null | head -1)
+    # Prefer zen kernel; ls sorts alphabetically so don't use ls to pick
+    if [[ -f "/boot/vmlinuz-linux-zen" ]]; then
+        KERNEL="/boot/vmlinuz-linux-zen"
+    elif [[ -f "/boot/vmlinuz-linux" ]]; then
+        KERNEL="/boot/vmlinuz-linux"
+    else
+        echo "ERROR: no kernel found in /boot"; exit 1
+    fi
+    echo "      kernel: ${KERNEL} ($(strings "$KERNEL" | grep -m1 'Linux version' | cut -d' ' -f3))"
     cp "$KERNEL" "${BOOT}/arch2ram-vmlinuz"
 
     # intel-ucode concatenated initrd

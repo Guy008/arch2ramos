@@ -37,26 +37,52 @@ mount -t proc  proc  /proc  || fail "proc"
 mount -t sysfs sysfs /sys   || fail "sysfs"
 mount -t devtmpfs dev /dev  || fail "devtmpfs"
 
+# Allow kernel cmdline to override config (useful for VM testing)
+# e.g. pass: img_src_dev=/dev/vda img_src_fstype=ext4
+for param in $(cat /proc/cmdline); do
+    case "$param" in
+        img_src_dev=*)      IMG_SRC_DEV="${param#img_src_dev=}" ;;
+        img_src_fstype=*)   IMG_SRC_FSTYPE="${param#img_src_fstype=}" ;;
+        img_file=*)         IMG_FILE="${param#img_file=}" ;;
+    esac
+done
+echo "      img_src_dev=${IMG_SRC_DEV} fstype=${IMG_SRC_FSTYPE}"
+
 echo "[0/6] Loading kernel modules..."
 KVER=$(uname -r)
 MODDIR="/lib/modules/${KVER}"
 for MOD in loop fat vfat squashfs overlay; do
     insmod "${MODDIR}/${MOD}.ko" 2>/dev/null && echo "      ${MOD}: OK" || echo "      ${MOD}: already loaded or built-in"
 done
-mknod /dev/loop0 b 7 0 2>/dev/null || true
+# BLK_DEV_LOOP_MIN_COUNT=0: no static loop devices — use loop-control to allocate
+mknod /dev/loop-control c 10 237 2>/dev/null || true
+echo "      loop-control: $(ls -la /dev/loop-control 2>&1)"
 
 echo "[1/6] Mounting source partition (${IMG_SRC_DEV})..."
+# btrfs: norecovery skips log replay so we can mount read-only even with dirty log
+mount -o ro,norecovery -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || \
 mount -o ro -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || fail "mount ${IMG_SRC_DEV} failed"
-echo "    /img_src contents: $(ls /img_src 2>&1)"
 echo "    Looking for: /img_src${IMG_FILE}"
-ls /img_src/Guy008/batocera-ram/ 2>/dev/null && echo "    FILE FOUND" || echo "    FILE NOT FOUND - ls /img_src:"
+ls /img_src${IMG_FILE} >/dev/null 2>&1 && echo "    FILE FOUND" || { echo "    FILE NOT FOUND (ls /img_src):"; ls /img_src 2>&1; }
 
 echo "[2/6] Setting up loop device on batocera.img (FAT partition at offset ${FAT_OFFSET})..."
-losetup /dev/loop0 /img_src${IMG_FILE} -o ${FAT_OFFSET} || \
-losetup --offset ${FAT_OFFSET} /dev/loop0 /img_src${IMG_FILE} || fail "losetup on batocera.img"
+echo "      img path: /img_src${IMG_FILE}"
+echo "      img size: $(ls -lh /img_src${IMG_FILE} 2>&1)"
+# Use losetup -f to let the kernel allocate a free loop device via loop-control
+LOOP_DEV=$(losetup -f 2>/dev/null)
+echo "      next free loop dev: ${LOOP_DEV}"
+# devtmpfs won't auto-create the node without udevd — create it manually
+if [ ! -e "${LOOP_DEV}" ]; then
+    MINOR="${LOOP_DEV##*loop}"
+    mknod "${LOOP_DEV}" b 7 "${MINOR}"
+    echo "      created ${LOOP_DEV} (minor ${MINOR})"
+fi
+echo "      loop dev: $(ls -la ${LOOP_DEV} 2>&1)"
+losetup -o ${FAT_OFFSET} "${LOOP_DEV}" /img_src${IMG_FILE} || fail "losetup on batocera.img"
+echo "      losetup OK: ${LOOP_DEV}"
 
 echo "[3/6] Mounting BATOCERA FAT partition..."
-mount -o ro -t vfat /dev/loop0 /boot_root || fail "FAT BATOCERA mount"
+mount -o ro -t vfat "${LOOP_DEV}" /boot_root || fail "FAT BATOCERA mount"
 
 echo "[4/6] Mounting Batocera squashfs..."
 mount -t squashfs -o ro /boot_root/boot/batocera /squash_base || fail "squashfs mount"
