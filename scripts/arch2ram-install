@@ -7,7 +7,12 @@
 set -e
 
 BOOT="/boot"
-GRUB_CUSTOM="/etc/grub.d/40_custom"
+# Support both plain grub and grub-customizer setups
+if [[ -f "/etc/grub.d/proxifiedScripts/custom" ]]; then
+    GRUB_CUSTOM="/etc/grub.d/proxifiedScripts/custom"
+else
+    GRUB_CUSTOM="/etc/grub.d/40_custom"
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INITRD_SRC="${SCRIPT_DIR}/../initrd"
 
@@ -75,14 +80,10 @@ build_initrd() {
 add_grub_entry() {
     local LABEL="$1"
     local INITRD_FILE="$2"
+    local NEW_ENTRY
+    NEW_ENTRY=$(cat << GRUBEOF
 
-    # Remove old entry with same label if exists
-    grep -v "$LABEL" "$GRUB_CUSTOM" > /tmp/grub_custom_tmp 2>/dev/null || true
-    cp /tmp/grub_custom_tmp "$GRUB_CUSTOM" 2>/dev/null || true
-
-    cat >> "$GRUB_CUSTOM" << GRUBEOF
-
-menuentry "${LABEL}" --class gnu-linux --class os {
+menuentry "${LABEL}" --class arch --class gnu-linux --class os {
     insmod fat
     insmod part_gpt
     set root='hd0,gpt1'
@@ -90,7 +91,24 @@ menuentry "${LABEL}" --class gnu-linux --class os {
     initrd /arch2ram-initrd-ucode.img /${INITRD_FILE}
 }
 GRUBEOF
+)
 
+    # Rewrite the custom file: keep header + all entries except our label, then add updated entry
+    python3 - "$GRUB_CUSTOM" "$LABEL" "$NEW_ENTRY" << 'PYEOF'
+import sys, re
+path, skip_label, new_entry = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    content = open(path).read()
+except FileNotFoundError:
+    content = "#!/bin/sh\nexec tail -n +3 $0\n# Custom GRUB entries\n"
+parts = re.split(r'(?=^menuentry )', content, flags=re.MULTILINE)
+header = parts[0]
+entries = [p for p in parts[1:] if f'"{skip_label}"' not in p]
+result = header + "".join(entries) + new_entry + "\n"
+open(path, 'w').write(result)
+PYEOF
+
+    chmod +x "$GRUB_CUSTOM"
     echo "[3/3] Regenerating GRUB..."
     grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null | grep -E "Found|Done|בוצע" || true
     echo "      → GRUB updated"
