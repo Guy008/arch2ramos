@@ -37,11 +37,23 @@ mount -t proc  proc  /proc  || fail "proc"
 mount -t sysfs sysfs /sys   || fail "sysfs"
 mount -t devtmpfs dev /dev  || fail "devtmpfs"
 
+echo "[0/6] Loading kernel modules..."
+KVER=$(uname -r)
+MODDIR="/lib/modules/${KVER}"
+for MOD in loop fat vfat squashfs overlay; do
+    insmod "${MODDIR}/${MOD}.ko" 2>/dev/null && echo "      ${MOD}: OK" || echo "      ${MOD}: already loaded or built-in"
+done
+mknod /dev/loop0 b 7 0 2>/dev/null || true
+
 echo "[1/6] Mounting source partition (${IMG_SRC_DEV})..."
 mount -o ro -t ${IMG_SRC_FSTYPE} "${IMG_SRC_DEV}" /img_src || fail "mount ${IMG_SRC_DEV} failed"
+echo "    /img_src contents: $(ls /img_src 2>&1)"
+echo "    Looking for: /img_src${IMG_FILE}"
+ls /img_src/Guy008/batocera-ram/ 2>/dev/null && echo "    FILE FOUND" || echo "    FILE NOT FOUND - ls /img_src:"
 
 echo "[2/6] Setting up loop device on batocera.img (FAT partition at offset ${FAT_OFFSET})..."
-losetup -o ${FAT_OFFSET} /dev/loop0 /img_src${IMG_FILE} || fail "losetup on batocera.img"
+losetup /dev/loop0 /img_src${IMG_FILE} -o ${FAT_OFFSET} || \
+losetup --offset ${FAT_OFFSET} /dev/loop0 /img_src${IMG_FILE} || fail "losetup on batocera.img"
 
 echo "[3/6] Mounting BATOCERA FAT partition..."
 mount -o ro -t vfat /dev/loop0 /boot_root || fail "FAT BATOCERA mount"

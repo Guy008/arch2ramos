@@ -49,6 +49,24 @@ build_initrd() {
     cp "$INIT_SCRIPT" "$BUILD/init"
     chmod 755 "$BUILD/init"
 
+    echo "      Adding kernel modules (loop, vfat, squashfs, overlay)..."
+    local KVER=$(uname -r)
+    local MODDIR="$BUILD/lib/modules/$KVER"
+    mkdir -p "$MODDIR"
+    local MODS=(loop fat vfat squashfs overlay)
+    for MOD in "${MODS[@]}"; do
+        local KO=$(find /lib/modules/$KVER -name "${MOD}.ko*" 2>/dev/null | head -1)
+        if [[ -n "$KO" ]]; then
+            # decompress zst if needed
+            if [[ "$KO" == *.zst ]]; then
+                zstd -d -q -o "$MODDIR/${MOD}.ko" "$KO"
+            else
+                cp "$KO" "$MODDIR/${MOD}.ko"
+            fi
+        fi
+    done
+    ls "$MODDIR/"
+
     echo "[2/3] Packing initrd..."
     (cd "$BUILD" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9) > "$OUTPUT"
     echo "      → $OUTPUT ($(du -sh "$OUTPUT" | cut -f1))"
