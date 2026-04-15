@@ -1,10 +1,15 @@
 #!/bin/ash
-# arch2ramos - initrd init script
-# Boots Arch Linux from RAM using squashfs + overlayfs
+# arch2ramos - Arch Linux from RAM boot script
+#
+# Mounts the root partition, loads arch-ram.sfs (squashfs of Arch),
+# sets up overlayfs (writes go to RAM tmpfs), then switch_root.
 
-SQUASHFS_DEV="UUID=REPLACE_WITH_ROOT_UUID"
+# --- CONFIGURATION (patched by arch2ram-install) ---
+SRC_DEV="REPLACE_WITH_ROOT_DEV"
+SRC_FSTYPE="REPLACE_WITH_ROOT_FSTYPE"
 SQUASHFS_PATH="/arch-ram.sfs"
-OVERLAY_SIZE="512M"
+OVERLAY_SIZE="2G"
+# --- END CONFIGURATION ---
 
 fail() {
     echo ""
@@ -17,34 +22,53 @@ echo ""
 echo "=== arch2ramos: booting Arch from RAM ==="
 echo ""
 
-# Basic mounts
-mount -t proc  proc  /proc  || fail "proc mount"
-mount -t sysfs sysfs /sys   || fail "sysfs mount"
-mount -t devtmpfs dev /dev  || fail "devtmpfs mount"
+mount -t proc  proc  /proc  || fail "proc"
+mount -t sysfs sysfs /sys   || fail "sysfs"
+mount -t devtmpfs dev /dev  || fail "devtmpfs"
 
-echo "[1/5] Mounting source partition..."
-SRC_DEV=$(blkid -U "${SQUASHFS_DEV#UUID=}" 2>/dev/null) || fail "UUID not found: ${SQUASHFS_DEV}"
-mount -o ro -t ext4 "${SRC_DEV}" /img_src || fail "source partition mount (${SRC_DEV})"
+echo "[1/5] Loading kernel modules..."
+KVER=$(uname -r)
+MODDIR="/lib/modules/${KVER}"
+for MOD in loop squashfs overlay; do
+    insmod "${MODDIR}/${MOD}.ko" 2>/dev/null && echo "      ${MOD}: OK" \
+      || echo "      ${MOD}: already loaded or built-in"
+done
+# BLK_DEV_LOOP_MIN_COUNT=0: allocate loop devices via loop-control
+mknod /dev/loop-control c 10 237 2>/dev/null || true
 
-echo "[2/5] Mounting squashfs from RAM image..."
-mount -t squashfs -o loop /img_src/${SQUASHFS_PATH} /squash_base || fail "squashfs mount"
+echo "[2/5] Mounting source partition (${SRC_DEV})..."
+mount -o ro -t ${SRC_FSTYPE} "${SRC_DEV}" /img_src || fail "mount ${SRC_DEV}"
+ls /img_src${SQUASHFS_PATH} >/dev/null 2>&1 \
+    && echo "      squashfs: FOUND ($(ls -lh /img_src${SQUASHFS_PATH} | awk '{print $5}'))" \
+    || fail "squashfs not found at /img_src${SQUASHFS_PATH}"
 
-echo "[3/5] Setting up overlayfs (writes go to RAM)..."
-mount -t tmpfs -o "size=${OVERLAY_SIZE}" tmpfs /overlay_root || fail "overlay tmpfs"
+echo "[3/5] Mounting squashfs..."
+LOOP_DEV=$(losetup -f 2>/dev/null)
+if [ ! -e "${LOOP_DEV}" ]; then
+    MINOR="${LOOP_DEV##*loop}"
+    mknod "${LOOP_DEV}" b 7 "${MINOR}"
+fi
+losetup "${LOOP_DEV}" /img_src${SQUASHFS_PATH} || fail "losetup on squashfs"
+mount -t squashfs -o ro "${LOOP_DEV}" /squash_base || fail "squashfs mount"
+echo "      squashfs mounted on ${LOOP_DEV}"
+
+echo "[4/5] Setting up overlayfs (writes → RAM)..."
+mount -t tmpfs -o size=${OVERLAY_SIZE} tmpfs /overlay_root || fail "overlay tmpfs"
 mkdir -p /overlay_root/upper /overlay_root/work
-
 mount -t overlay overlay \
-    -o "rw,lowerdir=/squash_base,upperdir=/overlay_root/upper,workdir=/overlay_root/work" \
-    /new_root || fail "overlayfs mount"
+    -o rw,lowerdir=/squash_base,upperdir=/overlay_root/upper,workdir=/overlay_root/work \
+    /new_root || fail "overlayfs"
 
-echo "[4/5] Moving mounts into new root..."
+echo "[5/5] Moving mounts and switching to Arch root..."
 mkdir -p /new_root/run
 mount -t tmpfs tmpfs /new_root/run
+mount --move /sys  /new_root/sys  || fail "move /sys"
+mount --move /proc /new_root/proc || fail "move /proc"
+mount --move /dev  /new_root/dev  || fail "move /dev"
 
-mount --move /sys      /new_root/sys   || fail "move /sys"
-mount --move /proc     /new_root/proc  || fail "move /proc"
-mount --move /dev      /new_root/dev   || fail "move /dev"
+# img_src stays mounted so the loop device fd stays valid
+# it will be unmounted naturally when initrd is cleaned up
 
-echo "[5/5] Switching to Arch root..."
 echo ""
+echo "=== Switching to Arch Linux (from RAM) ==="
 exec switch_root /new_root /sbin/init || fail "switch_root"

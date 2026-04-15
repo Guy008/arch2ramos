@@ -123,13 +123,16 @@ copy_kernel() {
 # ── MODE: arch ───────────────────────────────────────────────────────────────
 
 if [[ "$MODE" == "arch" ]]; then
-    ROOT_UUID=$(findmnt -n -o UUID /)
+    ROOT_DEV=$(findmnt -n -o SOURCE /)
+    ROOT_FSTYPE=$(findmnt -n -o FSTYPE /)
     echo "=== arch2ram-install: Arch from RAM ==="
-    echo "Root UUID: ${ROOT_UUID}"
+    echo "Root device: ${ROOT_DEV} (${ROOT_FSTYPE})"
     echo ""
 
     INIT_TMP="/tmp/arch2ram-init-patched"
-    sed "s|UUID=REPLACE_WITH_ROOT_UUID|UUID=${ROOT_UUID}|" \
+    sed \
+        -e "s|REPLACE_WITH_ROOT_DEV|${ROOT_DEV}|" \
+        -e "s|REPLACE_WITH_ROOT_FSTYPE|${ROOT_FSTYPE}|" \
         "${INITRD_SRC}/init" > "$INIT_TMP"
     chmod +x "$INIT_TMP"
 
