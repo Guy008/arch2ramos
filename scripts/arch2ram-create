@@ -1,0 +1,62 @@
+#!/bin/bash
+# arch2ram-create - build squashfs image from running Arch system
+# Run this from your regular disk-based Arch installation
+# Result: /arch-ram.sfs on your root partition
+
+set -e
+
+OUTPUT="/arch-ram.sfs"
+OUTPUT_TMP="/arch-ram.sfs.tmp"
+COMP="zstd"      # fast decompression = fast RAM boot
+BLOCK="1M"
+
+# Directories to exclude from the squashfs
+EXCLUDES=(
+    /proc
+    /sys
+    /dev
+    /run
+    /tmp
+    /mnt
+    /media
+    /lost+found
+    /arch-ram.sfs
+    /arch-ram.sfs.tmp
+    /home            # keep home on disk, not in RAM image
+    /var/cache/pacman/pkg
+    /var/log
+    /var/tmp
+)
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run as root: sudo arch2ram-create"
+    exit 1
+fi
+
+if ! command -v mksquashfs &>/dev/null; then
+    echo "Install squashfs-tools: sudo pacman -S squashfs-tools"
+    exit 1
+fi
+
+echo "=== arch2ram-create ==="
+echo "Output: ${OUTPUT}"
+echo "Compression: ${COMP}"
+echo ""
+
+# Build exclude args
+EXCL_ARGS=()
+for dir in "${EXCLUDES[@]}"; do
+    EXCL_ARGS+=(-e "$dir")
+done
+
+echo "Building squashfs (this takes a few minutes)..."
+mksquashfs / "${OUTPUT_TMP}" \
+    -comp "${COMP}" \
+    -b "${BLOCK}" \
+    -no-progress \
+    "${EXCL_ARGS[@]}"
+
+mv "${OUTPUT_TMP}" "${OUTPUT}"
+echo ""
+echo "Done! Size: $(du -sh ${OUTPUT} | cut -f1)"
+echo "Run arch2ram-install to set up GRUB entry."

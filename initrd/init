@@ -1,0 +1,49 @@
+#!/bin/ash
+# arch2ramos - initrd init script
+# Boots Arch Linux from RAM using squashfs + overlayfs
+
+SQUASHFS_DEV="UUID=REPLACE_WITH_ROOT_UUID"
+SQUASHFS_PATH="/arch-ram.sfs"
+OVERLAY_SIZE="512M"
+
+fail() {
+    echo ""
+    echo "!!! arch2ramos boot failed: $1"
+    echo "!!! Dropping to emergency shell"
+    exec /bin/ash
+}
+
+echo ""
+echo "=== arch2ramos: booting Arch from RAM ==="
+echo ""
+
+# Basic mounts
+mount -t proc  proc  /proc  || fail "proc mount"
+mount -t sysfs sysfs /sys   || fail "sysfs mount"
+mount -t devtmpfs dev /dev  || fail "devtmpfs mount"
+
+echo "[1/5] Mounting source partition..."
+mount -o ro -t ext4 "$SQUASHFS_DEV" /img_src || fail "source partition mount (UUID correct?)"
+
+echo "[2/5] Mounting squashfs from RAM image..."
+mount -t squashfs -o loop /img_src/${SQUASHFS_PATH} /squash_base || fail "squashfs mount"
+
+echo "[3/5] Setting up overlayfs (writes go to RAM)..."
+mount -t tmpfs -o "size=${OVERLAY_SIZE}" tmpfs /overlay_root || fail "overlay tmpfs"
+mkdir -p /overlay_root/upper /overlay_root/work
+
+mount -t overlay overlay \
+    -o "rw,lowerdir=/squash_base,upperdir=/overlay_root/upper,workdir=/overlay_root/work" \
+    /new_root || fail "overlayfs mount"
+
+echo "[4/5] Moving mounts into new root..."
+mkdir -p /new_root/run
+mount -t tmpfs tmpfs /new_root/run
+
+mount --move /sys      /new_root/sys   || fail "move /sys"
+mount --move /proc     /new_root/proc  || fail "move /proc"
+mount --move /dev      /new_root/dev   || fail "move /dev"
+
+echo "[5/5] Switching to Arch root..."
+echo ""
+exec switch_root /new_root /sbin/init || fail "switch_root"
