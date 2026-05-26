@@ -2,11 +2,12 @@
 # arch2ram-uninstall — remove everything arch2ramos installed
 #
 # Leaves alone:
-#   - mkinitcpio-archiso and squashfs-tools packages (might be wanted)
+#   - cage, hyprland, mkinitcpio-archiso, squashfs-tools packages
+#     (might be wanted for other reasons — remove with pacman -Rs manually)
 #   - the squashfs file (size, valuable — removed only with --purge)
 #
 # Usage:
-#   sudo arch2ram-uninstall            (remove configs, initramfs, GRUB entry)
+#   sudo arch2ram-uninstall            (remove configs, scripts, units, GRUB entries)
 #   sudo arch2ram-uninstall --purge    (also remove the squashfs)
 
 set -e
@@ -25,34 +26,59 @@ else
     GRUB_CUSTOM="/etc/grub.d/40_custom"
 fi
 
-LABEL="Arch Linux from RAM"
+# All labels we ever managed (current + legacy)
+LABELS=(
+    "Arch Linux from RAM (kiosk)"
+    "Arch Linux from RAM (hyprland)"
+    "Arch Linux from RAM (debug TTY)"
+    "Arch Linux from RAM"
+)
 
 echo "=== arch2ram-uninstall ==="
 echo ""
 
-echo "[1/4] Removing mkinitcpio config + preset..."
+echo "[1/6] Disabling + removing systemd services..."
+for svc in arch2ram-drm-fixup.service arch2ram-kiosk.service arch2ram-hyprland.service; do
+    systemctl disable "$svc" >/dev/null 2>&1 || true
+    rm -vf "/etc/systemd/system/$svc"
+done
+systemctl daemon-reload || true
+
+echo "[2/6] Removing scripts + helpers..."
+rm -vf /usr/local/bin/arch2ram-drm-fixup
+rm -vf /usr/local/bin/arch2ram-kiosk
+rm -vf /usr/local/bin/arch2ram-hyprland
+rm -vf /etc/systemd/user-environment-generators/10-arch2ram-drm
+rm -vf /usr/share/konsole/arch2ram-kiosk.profile
+
+echo "[3/6] Removing mkinitcpio config + preset + arch2ram configs..."
 rm -vf /etc/mkinitcpio.d/arch2ram.preset
 rm -vf /etc/arch2ram/mkinitcpio.conf
+rm -vf /etc/arch2ram/hyprland-ram.conf
 rmdir --ignore-fail-on-non-empty /etc/arch2ram 2>/dev/null || true
 
-echo "[2/4] Removing initramfs..."
+echo "[4/6] Removing initramfs..."
 rm -vf /boot/initramfs-arch2ram.img
 
-echo "[3/4] Removing GRUB entry..."
+echo "[5/6] Removing GRUB entries..."
 if [[ -f "$GRUB_CUSTOM" ]]; then
-    python3 - "$GRUB_CUSTOM" "$LABEL" <<'PYEOF'
+    python3 - "$GRUB_CUSTOM" "${LABELS[@]}" <<'PYEOF'
 import sys, re
-path, skip_label = sys.argv[1], sys.argv[2]
+path = sys.argv[1]
+skip_labels = sys.argv[2:]
 content = open(path).read()
 parts = re.split(r'(?=^menuentry )', content, flags=re.MULTILINE)
 header = parts[0]
-entries = [p for p in parts[1:] if f'"{skip_label}"' not in p]
+def keep(p):
+    return not any(f'"{label}"' in p.split('\n', 1)[0] for label in skip_labels)
+entries = [p for p in parts[1:] if keep(p)]
 open(path, 'w').write(header + "".join(entries))
 PYEOF
-    grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -E "^(Found|Done|Generating)" || true
+    grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -E "^(Found|Done|Generating)" || \
+        echo "      WARNING: grub-mkconfig may have failed — re-run from disk mode."
 fi
 
-echo "[4/4] ${PURGE:+Removing}${PURGE:-Keeping} squashfs..."
+echo "[6/6] ${PURGE:+Removing}${PURGE:-Keeping} squashfs..."
 if (( PURGE )); then
     rm -vrf /var/lib/arch2ram
 else

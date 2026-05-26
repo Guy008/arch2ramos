@@ -1,27 +1,53 @@
 #!/bin/bash
 # arch2ram-install — set up Arch Linux to boot from RAM via archiso hooks
 #
-# What it does:
-#   1. Installs deps: mkinitcpio-archiso, squashfs-tools
-#   2. Installs our mkinitcpio config + preset
-#   3. Builds /boot/initramfs-arch2ram.img
-#   4. Writes a GRUB entry that uses archiso boot params
-#   5. Regenerates /boot/grub/grub.cfg
+# Installs three boot modes (added to GRUB based on what's available):
+#   1. Arch Linux from RAM (kiosk)    — cage compositor, single fullscreen app
+#   2. Arch Linux from RAM (hyprland) — multi-window desktop (if hyprland installed)
+#   3. Arch Linux from RAM (debug TTY)— multi-user.target only, ssh/diagnostics
 #
-# Usage:  sudo arch2ram-install
+# All three modes share:
+#   - the same squashfs root (built by arch2ram-create)
+#   - the simpledrm-unbind workaround (arch2ram-drm-fixup) for hybrid GPUs
+#   - inherited kernel cmdline (GPU tuning, mitigations, nvme, etc.)
+#
+# Usage:
+#   sudo arch2ram-install                 (full install — kiosk + maybe hyprland + debug)
+#   sudo arch2ram-install --no-kiosk      (skip cage install + kiosk entry)
+#   sudo arch2ram-install --no-hyprland   (don't add hyprland entry even if installed)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Source files in the project tree
 CONF_SRC="${PROJECT_DIR}/mkinitcpio/arch2ram.conf"
 PRESET_SRC="${PROJECT_DIR}/mkinitcpio/arch2ram.preset"
+DRM_FIXUP_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-drm-fixup"
+KIOSK_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-kiosk"
+HYPRLAND_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-hyprland"
+DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
+KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
+HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
+DRM_ENVGEN_SRC="${PROJECT_DIR}/env/10-arch2ram-drm"
+KONSOLE_PROFILE_SRC="${PROJECT_DIR}/konsole/arch2ram-kiosk.profile"
+HYPRLAND_CONF_SRC="${PROJECT_DIR}/hyprland/hyprland-ram.conf"
 
+# Install destinations
 CONF_DST="/etc/arch2ram/mkinitcpio.conf"
 PRESET_DST="/etc/mkinitcpio.d/arch2ram.preset"
 INITRAMFS="/boot/initramfs-arch2ram.img"
 KERNEL_IMG="/boot/vmlinuz-linux"
+DRM_FIXUP_SCRIPT_DST="/usr/local/bin/arch2ram-drm-fixup"
+KIOSK_SCRIPT_DST="/usr/local/bin/arch2ram-kiosk"
+HYPRLAND_SCRIPT_DST="/usr/local/bin/arch2ram-hyprland"
+DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
+KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
+HYPRLAND_UNIT_DST="/etc/systemd/system/arch2ram-hyprland.service"
+DRM_ENVGEN_DST="/etc/systemd/user-environment-generators/10-arch2ram-drm"
+KONSOLE_PROFILE_DST="/usr/share/konsole/arch2ram-kiosk.profile"
+HYPRLAND_CONF_DST="/etc/arch2ram/hyprland-ram.conf"
 
 # Support both plain grub and grub-customizer setups
 if [[ -f "/etc/grub.d/proxifiedScripts/custom" ]]; then
@@ -30,7 +56,28 @@ else
     GRUB_CUSTOM="/etc/grub.d/40_custom"
 fi
 
-LABEL="Arch Linux from RAM"
+# Mode labels (used both for entry creation and for cleanup of older versions)
+LABEL_KIOSK="Arch Linux from RAM (kiosk)"
+LABEL_HYPRLAND="Arch Linux from RAM (hyprland)"
+LABEL_DEBUG="Arch Linux from RAM (debug TTY)"
+LABEL_LEGACY="Arch Linux from RAM"   # old single-entry name, scrubbed if found
+
+# Parse flags
+WANT_KIOSK=1
+WANT_HYPRLAND=auto    # 1=force, 0=skip, auto=enable iff hyprland is installed
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-kiosk)    WANT_KIOSK=0 ;;
+        --no-hyprland) WANT_HYPRLAND=0 ;;
+        --with-hyprland) WANT_HYPRLAND=1 ;;
+        -h|--help)
+            sed -n '2,/^$/p' "$0" | sed 's|^# \?||'
+            exit 0
+            ;;
+        *) echo "Unknown flag: $1"; exit 1 ;;
+    esac
+    shift
+done
 
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0 $*"
@@ -46,15 +93,19 @@ echo ""
 
 # ── 1. Dependencies ──────────────────────────────────────────────────────────
 
-echo "[1/5] Checking dependencies..."
+echo "[1/6] Checking dependencies..."
 NEED=()
 pacman -Q mkinitcpio-archiso &>/dev/null || NEED+=(mkinitcpio-archiso)
 pacman -Q squashfs-tools     &>/dev/null || NEED+=(squashfs-tools)
+if (( WANT_KIOSK )); then
+    pacman -Q cage           &>/dev/null || NEED+=(cage)
+    pacman -Q konsole        &>/dev/null || NEED+=(konsole)
+fi
 if (( ${#NEED[@]} )); then
     echo "      installing: ${NEED[*]}"
     pacman -S --needed --noconfirm "${NEED[@]}"
 else
-    echo "      OK (mkinitcpio-archiso, squashfs-tools present)"
+    echo "      OK"
 fi
 
 # Sanity: kernel must exist
@@ -63,21 +114,67 @@ if [[ ! -f "$KERNEL_IMG" ]]; then
     exit 1
 fi
 
+# Decide on hyprland mode availability
+HAS_HYPRLAND=0
+case "$WANT_HYPRLAND" in
+    1)
+        if ! pacman -Q hyprland &>/dev/null; then
+            echo "      installing hyprland (--with-hyprland)..."
+            pacman -S --needed --noconfirm hyprland
+        fi
+        HAS_HYPRLAND=1
+        ;;
+    auto)
+        pacman -Q hyprland &>/dev/null && HAS_HYPRLAND=1
+        ;;
+    0) HAS_HYPRLAND=0 ;;
+esac
+
 # ── 2. Install mkinitcpio config + preset ────────────────────────────────────
 
-echo "[2/5] Installing mkinitcpio config + preset..."
+echo "[2/6] Installing mkinitcpio config + preset..."
 install -Dm644 "$CONF_SRC"   "$CONF_DST"
 install -Dm644 "$PRESET_SRC" "$PRESET_DST"
 echo "      $CONF_DST"
 echo "      $PRESET_DST"
 
-# ── 3. Build initramfs ───────────────────────────────────────────────────────
+# ── 3. Install arch2ramos runtime files (scripts, units, configs) ────────────
 
-echo "[3/5] Building initramfs (this takes ~30s)..."
+echo "[3/6] Installing arch2ramos runtime files..."
+# DRM fixup (required for all modes on hybrid-GPU systems)
+install -Dm755 "$DRM_FIXUP_SCRIPT_SRC" "$DRM_FIXUP_SCRIPT_DST"
+install -Dm644 "$DRM_FIXUP_UNIT_SRC"   "$DRM_FIXUP_UNIT_DST"
+install -Dm755 "$DRM_ENVGEN_SRC"       "$DRM_ENVGEN_DST"
+systemctl enable arch2ram-drm-fixup.service >/dev/null 2>&1 || true
+echo "      drm-fixup: script + service + env generator"
+
+# Kiosk (cage)
+if (( WANT_KIOSK )); then
+    install -Dm755 "$KIOSK_SCRIPT_SRC" "$KIOSK_SCRIPT_DST"
+    install -Dm644 "$KIOSK_UNIT_SRC"   "$KIOSK_UNIT_DST"
+    install -Dm644 "$KONSOLE_PROFILE_SRC" "$KONSOLE_PROFILE_DST"
+    systemctl enable arch2ram-kiosk.service >/dev/null 2>&1 || true
+    echo "      kiosk: script + service + konsole profile"
+fi
+
+# Hyprland
+if (( HAS_HYPRLAND )); then
+    install -Dm755 "$HYPRLAND_SCRIPT_SRC" "$HYPRLAND_SCRIPT_DST"
+    install -Dm644 "$HYPRLAND_UNIT_SRC"   "$HYPRLAND_UNIT_DST"
+    install -Dm644 "$HYPRLAND_CONF_SRC"   "$HYPRLAND_CONF_DST"
+    systemctl enable arch2ram-hyprland.service >/dev/null 2>&1 || true
+    echo "      hyprland: script + service + config wrapper"
+else
+    echo "      hyprland: skipped (not installed or disabled by flag)"
+fi
+
+# ── 4. Build initramfs ───────────────────────────────────────────────────────
+
+echo "[4/6] Building initramfs (this takes ~30s)..."
 mkinitcpio -p arch2ram
 echo "      → $INITRAMFS ($(du -sh "$INITRAMFS" | cut -f1))"
 
-# ── 4. Determine boot params and add GRUB entry ──────────────────────────────
+# ── 5. Determine boot params and write GRUB entries ──────────────────────────
 
 ROOT_UUID="$(findmnt -n -o UUID /)"
 BOOT_SRC="$(findmnt -n -o SOURCE /boot 2>/dev/null || findmnt -n -o SOURCE /)"
@@ -102,10 +199,9 @@ UCODE_LINES=""
 [[ -f "/boot/intel-ucode.img" ]] && UCODE_LINES+="    initrd ${INTEL_UCODE}"$'\n'
 [[ -f "/boot/amd-ucode.img"   ]] && UCODE_LINES+="    initrd ${AMD_UCODE}"$'\n'
 
-# Pull the user's existing kernel cmdline so we inherit hardware-specific
-# tunings (GPU selection on hybrid graphics, NVMe options, mitigations,
-# ipv6, microcode, …). We drop params that archiso owns (root=, rootfstype=,
-# resume= — RAM mode has no swap; rw — overlay is rw by default).
+# Inherit hardware-specific tunings from the user's existing kernel cmdline.
+# Drop params that archiso owns (root=, rootfstype=, resume= — no swap in RAM
+# mode; rw — overlay is rw by default).
 EXTRA_CMDLINE=""
 SRC_CMDLINE=""
 if [[ -f /etc/kernel/cmdline ]]; then
@@ -117,57 +213,89 @@ fi
 if [[ -n "$SRC_CMDLINE" ]]; then
     for tok in $SRC_CMDLINE; do
         case "$tok" in
-            root=*|rootfstype=*|resume=*|rw|ro|rootflags=*) ;;     # archiso handles these
+            root=*|rootfstype=*|resume=*|rw|ro|rootflags=*) ;;
             *) EXTRA_CMDLINE+="${EXTRA_CMDLINE:+ }$tok" ;;
         esac
     done
 fi
 
-echo "[4/5] Writing GRUB entry to $GRUB_CUSTOM..."
-echo "      root UUID:    $ROOT_UUID"
-echo "      boot UUID:    $BOOT_UUID  (source: $BOOT_SRC)"
-echo "      kernel path:  $KERNEL_PATH"
-echo "      initrd path:  $INITRD_PATH"
-echo "      extra cmdline: ${EXTRA_CMDLINE:-<none>}"
+# Emit a single GRUB menuentry. Args: label, mode-specific kernel args.
+emit_entry() {
+    local label="$1"
+    local mode_args="$2"
+    cat <<GRUBEOF
 
-NEW_ENTRY=$(cat <<GRUBEOF
-
-menuentry "${LABEL}" --class arch --class gnu-linux --class os {
+menuentry "${label}" --class arch --class gnu-linux --class os {
     insmod part_gpt
     insmod fat
     insmod ext2
     search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
-    linux  ${KERNEL_PATH} archisobasedir=var/lib/arch2ram archisosearchuuid=${ROOT_UUID} copytoram=y cow_spacesize=2G${EXTRA_CMDLINE:+ }${EXTRA_CMDLINE}
+    linux  ${KERNEL_PATH} archisobasedir=var/lib/arch2ram archisosearchuuid=${ROOT_UUID} copytoram=y cow_spacesize=2G${EXTRA_CMDLINE:+ }${EXTRA_CMDLINE}${mode_args:+ }${mode_args}
 ${UCODE_LINES}    initrd ${INITRD_PATH}
 }
 GRUBEOF
-)
+}
 
-# Rewrite the custom file: keep header + entries other than ours, append updated entry.
-python3 - "$GRUB_CUSTOM" "$LABEL" "$NEW_ENTRY" <<'PYEOF'
+# Build the entries
+NEW_ENTRIES=""
+LABELS_TO_REPLACE=("$LABEL_LEGACY" "$LABEL_DEBUG")
+if (( WANT_KIOSK )); then
+    NEW_ENTRIES+="$(emit_entry "$LABEL_KIOSK" "systemd.unit=multi-user.target arch2ram.mode=kiosk")"$'\n'
+    LABELS_TO_REPLACE+=("$LABEL_KIOSK")
+fi
+if (( HAS_HYPRLAND )); then
+    NEW_ENTRIES+="$(emit_entry "$LABEL_HYPRLAND" "systemd.unit=multi-user.target arch2ram.mode=hyprland")"$'\n'
+    LABELS_TO_REPLACE+=("$LABEL_HYPRLAND")
+fi
+NEW_ENTRIES+="$(emit_entry "$LABEL_DEBUG" "systemd.unit=multi-user.target")"$'\n'
+
+echo "[5/6] Writing GRUB entries to $GRUB_CUSTOM..."
+echo "      boot UUID:    $BOOT_UUID  (source: $BOOT_SRC)"
+echo "      root UUID:    $ROOT_UUID"
+echo "      kernel path:  $KERNEL_PATH"
+echo "      modes:        kiosk=$WANT_KIOSK hyprland=$HAS_HYPRLAND debug=1"
+
+# Rewrite custom file: keep header + entries with labels not in our managed set,
+# then append our entries.
+python3 - "$GRUB_CUSTOM" "$NEW_ENTRIES" "${LABELS_TO_REPLACE[@]}" <<'PYEOF'
 import sys, re, os
-path, skip_label, new_entry = sys.argv[1], sys.argv[2], sys.argv[3]
+path = sys.argv[1]
+new_entries = sys.argv[2]
+skip_labels = sys.argv[3:]
 try:
     content = open(path).read()
 except FileNotFoundError:
     content = "#!/bin/sh\nexec tail -n +3 $0\n# Custom GRUB entries — managed by arch2ram-install\n"
 parts = re.split(r'(?=^menuentry )', content, flags=re.MULTILINE)
 header = parts[0]
-entries = [p for p in parts[1:] if f'"{skip_label}"' not in p]
-result = header + "".join(entries) + new_entry + "\n"
+def keep(p):
+    return not any(f'"{label}"' in p.split('\n', 1)[0] for label in skip_labels)
+entries = [p for p in parts[1:] if keep(p)]
+result = header + "".join(entries) + new_entries
 open(path, 'w').write(result)
 os.chmod(path, 0o755)
 PYEOF
 
-# ── 5. Regenerate grub.cfg ───────────────────────────────────────────────────
+# ── 6. Regenerate grub.cfg ───────────────────────────────────────────────────
 
-echo "[5/5] Regenerating GRUB config..."
-grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -E "^(Found|Done|Generating)" || true
+echo "[6/6] Regenerating GRUB config..."
+if grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | tee /tmp/arch2ram-grub.log | grep -qE "^(Found|Done|Generating)"; then
+    echo "      OK"
+else
+    echo "      WARNING: grub-mkconfig may have failed (e.g. if running from RAM mode,"
+    echo "      overlayfs root prevents canonical path resolution). Re-run from disk mode."
+fi
 
 echo ""
 echo "=== Done ==="
+echo ""
+echo "Boot modes installed:"
+(( WANT_KIOSK ))    && echo "  • $LABEL_KIOSK   (cage, single fullscreen app)"
+(( HAS_HYPRLAND )) && echo "  • $LABEL_HYPRLAND (multi-window desktop)"
+echo "  • $LABEL_DEBUG (tty only, ssh/diagnostics)"
+echo ""
 echo "Next: sudo arch2ram-create     (build the squashfs, ~5 min)"
-echo "Then: reboot → select 'Arch Linux from RAM' in GRUB"
+echo "Then: reboot → select a mode in GRUB"
 echo ""
 echo "Note: if GRUB_TIMEOUT in /etc/default/grub is too short (<5s)"
-echo "you may not have time to select the entry — bump it before rebooting."
+echo "you may not have time to select an entry — bump it before rebooting."
