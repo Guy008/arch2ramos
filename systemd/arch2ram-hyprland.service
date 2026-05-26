@@ -1,0 +1,29 @@
+[Unit]
+Description=arch2ramos hyprland desktop compositor
+Documentation=https://wiki.hyprland.org/
+ConditionKernelCommandLine=arch2ram.mode=hyprland
+After=systemd-user-sessions.service arch2ram-drm-fixup.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+User=Guy008
+Group=Guy008
+PAMName=login
+WorkingDirectory=/home/Guy008
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+UtmpIdentifier=tty1
+UtmpMode=user
+ExecStart=/usr/local/bin/arch2ram-hyprland
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

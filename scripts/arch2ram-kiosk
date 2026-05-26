@@ -1,0 +1,50 @@
+#!/bin/bash
+# arch2ramos: launch cage kiosk compositor with a starter app.
+# Triggered by arch2ram-kiosk.service when boot cmdline contains
+# arch2ram.mode=kiosk.
+
+set -e
+
+# Wait for arch2ram-drm-fixup to settle the DRM devices.
+for _ in 1 2 3 4 5; do
+    [[ -e /dev/dri/card0 ]] && break
+    sleep 0.5
+done
+
+# Runtime dir for the user (cage/wayland need it)
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+fi
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=cage
+
+# Hebrew + English keyboard, toggle with Alt+Shift.
+# NOTE: no LED indicator — user has a keyboard whose LED toggle
+# misbehaves; the user reads the layout from what they're typing.
+export XKB_DEFAULT_LAYOUT=us,il
+export XKB_DEFAULT_OPTIONS=grp:alt_shift_toggle
+
+# Locale (Hebrew rendering / formatting)
+export LANG=he_IL.UTF-8
+export LC_CTYPE=he_IL.UTF-8
+
+# Pick best terminal for Hebrew BiDi.
+# konsole has actual BiDi rendering; foot/alacritty don't.
+KIOSK_CMD=()
+if command -v konsole &>/dev/null; then
+    KIOSK_CMD=(/usr/bin/konsole
+        --profile arch2ram-kiosk
+        --fullscreen
+        --hide-menubar
+        --hide-tabbar
+    )
+elif command -v foot &>/dev/null; then
+    KIOSK_CMD=(/usr/bin/foot --font="DejaVu Sans Mono:size=28")
+else
+    KIOSK_CMD=(/usr/bin/bash)
+fi
+
+echo "Starting cage with: ${KIOSK_CMD[*]}"
+exec cage -s -- "${KIOSK_CMD[@]}"

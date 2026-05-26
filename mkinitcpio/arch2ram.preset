@@ -1,0 +1,13 @@
+# arch2ramos mkinitcpio preset
+# Installed to: /etc/mkinitcpio.d/arch2ram.preset
+#
+# Builds: /boot/initramfs-arch2ram.img
+# Targets the standard linux kernel — /boot/vmlinuz-linux
+# Picked up automatically by the pacman mkinitcpio hook on kernel updates.
+
+ALL_kver="/boot/vmlinuz-linux"
+ALL_config="/etc/arch2ram/mkinitcpio.conf"
+
+PRESETS=('default')
+
+default_image="/boot/initramfs-arch2ram.img"

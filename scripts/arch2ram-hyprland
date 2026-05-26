@@ -1,0 +1,28 @@
+#!/bin/bash
+# arch2ramos: launch hyprland as the desktop compositor.
+# Activated by arch2ram-hyprland.service when boot cmdline contains
+# arch2ram.mode=hyprland.
+
+set -e
+
+# Wait for arch2ram-drm-fixup to settle the DRM devices.
+for _ in 1 2 3 4 5; do
+    [[ -e /dev/dri/card0 ]] && break
+    sleep 0.5
+done
+
+# Runtime dir
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+fi
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=Hyprland
+
+# Locale (Hebrew)
+export LANG=he_IL.UTF-8
+export LC_CTYPE=he_IL.UTF-8
+
+# Launch hyprland with our RAM-aware config wrapper
+exec hyprland --config /etc/arch2ram/hyprland-ram.conf

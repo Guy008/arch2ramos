@@ -1,0 +1,69 @@
+#!/bin/bash
+# arch2ramos: post-udev DRM fixup for RAM mode.
+#
+# The real fix: unbind simpledrm. In RAM mode the EFI simple-framebuffer
+# stays bound to simpledrm even after amdgpu takes over fb0, leaving a
+# stale /dev/dri/card0 + seat0 attachment that confuses KWin/logind and
+# makes Plasma report "no outputs". Unbinding releases minor 0 and
+# removes the device from seat0, so KWin's default enumeration finds
+# only the real GPUs (and uses the one with a connected output).
+
+set -e
+grep -q archisobasedir /proc/cmdline || exit 0
+
+echo "Waiting for udev to settle before fixup..."
+udevadm settle --timeout=15 || true
+
+# ── unbind simpledrm (releases /dev/dri/card0 + its seat0 attachment) ──
+echo "Looking for simple-framebuffer platform devices to unbind..."
+unbound=0
+if [[ -d /sys/bus/platform/drivers/simple-framebuffer ]]; then
+    for dev in /sys/bus/platform/drivers/simple-framebuffer/*; do
+        name="${dev##*/}"
+        case "$name" in
+            bind|unbind|uevent|module|*.attr) continue ;;
+        esac
+        [[ -L "$dev" ]] || continue
+        echo "  unbinding $name"
+        echo "$name" > /sys/bus/platform/drivers/simple-framebuffer/unbind 2>/dev/null && unbound=$((unbound+1)) || true
+    done
+fi
+echo "  unbound $unbound simple-framebuffer device(s)"
+
+# Let the remove events propagate (logind needs to detach the seat node)
+udevadm settle --timeout=10 || true
+
+# Find the card with a connected display
+target_card=""
+target_pci=""
+for f in /sys/class/drm/card*-*/status; do
+    if [[ "$(cat "$f")" == "connected" ]]; then
+        conn="${f%/status}"; conn="${conn##*/}"
+        target_card="${conn%%-*}"
+        target_pci="$(readlink /sys/class/drm/$target_card/device | sed 's|.*/||')"
+        echo "Connected display: $conn → $target_card (PCI=$target_pci)"
+        break
+    fi
+done
+
+# Symlink /dev/dri/card0 if missing (some apps still hardcode card0)
+if [[ -n "$target_card" && ! -e /dev/dri/card0 ]]; then
+    ln -sf "$target_card" /dev/dri/card0
+    echo "Symlinked /dev/dri/card0 → $target_card"
+fi
+
+# Force permissions/ACL on every card node (safety net for race conditions)
+for d in /dev/dri/card[0-9]*; do
+    [[ -c "$d" ]] || continue
+    chgrp video "$d" && chmod 660 "$d"
+    setfacl -m u:Guy008:rw "$d" 2>/dev/null && echo "ACL+ Guy008 on $d" || true
+done
+for r in /dev/dri/renderD*; do
+    [[ -c "$r" ]] || continue
+    chgrp render "$r" 2>/dev/null
+    chmod 666 "$r" 2>/dev/null
+done
+
+echo ""
+echo "Final /dev/dri state:"
+ls -la /dev/dri/

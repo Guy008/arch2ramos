@@ -1,0 +1,16 @@
+[Unit]
+Description=arch2ramos: ensure /dev/dri/card0 exists (RAM mode workaround for simpledrm)
+ConditionKernelCommandLine=archisobasedir
+DefaultDependencies=no
+After=systemd-udev-trigger.service systemd-udevd.service
+Before=display-manager.service basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/arch2ram-drm-fixup
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=basic.target

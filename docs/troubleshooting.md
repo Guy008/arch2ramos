@@ -1,94 +1,115 @@
 # Troubleshooting
 
-## Boot appears to go straight to normal Arch (RAM entry never runs)
+## GRUB boots normal Arch — never reaches the "from RAM" entry
 
-**Symptom:** After installing, rebooting always boots normal Arch. `journalctl --list-boots`
-shows no entry with `BOOT_IMAGE=/arch2ram-vmlinuz` — only the normal kernel.
+**Symptom:** After running `arch2ram-install`, every reboot lands in your
+regular disk-Arch. `journalctl --list-boots` shows no entries with
+`BOOT_IMAGE=/vmlinuz-linux ... archisobasedir=...`.
 
-**Root cause:** `GRUB_TIMEOUT` is too short (e.g. `"2"` seconds) and `GRUB_DEFAULT="Arch Linux"`
-auto-selects the normal entry before you can navigate to "Arch Linux from RAM".
+**Root cause:** `GRUB_TIMEOUT` in `/etc/default/grub` is too short
+(commonly 0–2 seconds) and `GRUB_DEFAULT` points to the regular entry,
+so GRUB auto-boots before you have time to navigate to the RAM entry.
 
 **Fix:**
 ```bash
-# Increase timeout so you have time to select the RAM entry
-sudo sed -i 's/GRUB_TIMEOUT=.*/GRUB_TIMEOUT="10"/' /etc/default/grub
+sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=10/' /etc/default/grub
 sudo grub-mkconfig -o /boot/grub/grub.cfg
 ```
-Then reboot and use arrow keys within 10 seconds to select "Arch Linux from RAM".
+Reboot, then use the arrow keys within 10 seconds to select
+"Arch Linux from RAM".
 
 ---
 
-## Black screen after selecting RAM entry (no text output)
+## Initramfs drops to emergency shell — "device with UUID ... not found"
 
-**Symptom:** GRUB loads the entry, screen goes black, nothing visible.
-
-**Root cause:** `quiet` suppresses kernel output; nvidia framebuffer not active without its driver.
-
-**Fix:** Use `nomodeset` and remove `quiet` from the GRUB entry:
+**Symptom:** Boot reaches the archiso hook output, then prints something like:
 ```
-linux  /arch2ram-vmlinuz console=tty0 console=tty1 rdinit=/init nomodeset
+ERROR: 'UUID=<...>' device did not show up after 30 seconds
+   Falling back to interactive prompt
 ```
-`nomodeset` forces VGA text mode — you will see all init script output.
 
----
+**Root cause:** The `archisosearchuuid` in the GRUB entry doesn't match
+the actual UUID of the partition that holds the squashfs. Most often
+this happens after re-formatting or moving the partition.
 
-## losetup: No such device or address (ENXIO)
-
-**Symptom:** `[3/5] Mounting squashfs...` fails with "No such device or address".
-
-**Root cause:** Kernel module version mismatch. The running kernel (e.g. `linux`) doesn't match
-the modules bundled in the initrd (built for `linux-zen`). Check:
+**Fix:**
 ```bash
-uname -r                   # running kernel
-ls /boot/arch2ram-vmlinuz  # which kernel was copied
-```
-
-**Fix:** Re-run `arch2ram-install`. The `copy_kernel()` function explicitly prefers `linux-zen`.
-If both kernels are installed, make sure the zen kernel is running when you install.
-
----
-
-## losetup: No such file or directory (ENOENT on /dev/loop0)
-
-**Symptom:** `losetup` fails because `/dev/loop0` doesn't exist.
-
-**Root cause:** Kernel compiled with `CONFIG_BLK_DEV_LOOP_MIN_COUNT=0` — no static loop nodes.
-Must allocate via `/dev/loop-control`.
-
-**Fix (already in init):** The init script uses `losetup -f` via loop-control, then `mknod` if
-the node is missing:
-```sh
-mknod /dev/loop-control c 10 237 2>/dev/null || true
-LOOP_DEV=$(losetup -f 2>/dev/null)
-[ ! -e "${LOOP_DEV}" ] && mknod "${LOOP_DEV}" b 7 "${LOOP_DEV##*loop}"
+# from the emergency shell or after rebooting into disk Arch:
+findmnt -n -o UUID /                 # check the real UUID
+sudo arch2ram-install                # regenerates the GRUB entry with the current UUID
 ```
 
 ---
 
-## GRUB syntax error / grub-mkconfig fails
+## "no root file system image found"
 
-**Symptom:** `grub-mkconfig` reports "syntax error" around a specific line in grub.cfg.
+**Symptom:** archiso hook mounts the partition fine but then fails with:
+```
+ERROR: no root file system image found
+```
 
-**Root cause:** Old `add_grub_entry()` used `grep -v LABEL` which stripped `menuentry` lines
-but left orphaned `insmod / linux / initrd / }` blocks from previous entries.
+**Root cause:** `airootfs.sfs` is missing — either `arch2ram-create` was
+never run, or the path doesn't match what's in the GRUB entry.
 
-**Fix (already in arch2ram-install):** The function now uses python3 to parse and replace
-entire menuentry blocks cleanly.
+The expected path inside the source partition is:
+`<archisobasedir>/<arch>/airootfs.sfs`  →  by default
+`/var/lib/arch2ram/x86_64/airootfs.sfs`.
 
----
-
-## /etc/grub.d/40_custom not found
-
-**Symptom:** `arch2ram-install` writes the GRUB entry but it never appears in grub.cfg.
-
-**Root cause:** System uses grub-customizer, which uses `proxifiedScripts/custom` instead
-of `40_custom`.
-
-**Fix (already in arch2ram-install):** Script auto-detects the correct path:
+**Fix:**
 ```bash
-if [[ -f "/etc/grub.d/proxifiedScripts/custom" ]]; then
-    GRUB_CUSTOM="/etc/grub.d/proxifiedScripts/custom"
-else
-    GRUB_CUSTOM="/etc/grub.d/40_custom"
-fi
+sudo arch2ram-create
+ls -lh /var/lib/arch2ram/x86_64/   # should show airootfs.sfs
 ```
+
+---
+
+## After kernel update, RAM boot freezes / panics
+
+**Symptom:** Disk Arch is fine, but the "from RAM" entry hangs partway
+through boot or kernel-panics.
+
+**Root cause:** `/lib/modules/$KVER` inside the squashfs doesn't match
+the kernel that GRUB is loading. The mkinitcpio pacman hook rebuilds
+`initramfs-arch2ram.img` for the new kernel automatically — but the
+squashfs is a frozen snapshot and still ships the old `/lib/modules`.
+
+**Fix:** rebuild the squashfs after every kernel update:
+```bash
+sudo arch2ram-create
+reboot
+```
+
+---
+
+## copytoram fails with "out of memory" / huge image
+
+**Symptom:** Boot prints `:: Copying rootfs image to RAM...` and then
+errors out, or the system OOM-kills processes shortly after boot.
+
+**Root cause:** The squashfs is too large for `copytoram=y` to fit in
+tmpfs alongside the cowspace and your applications. Default tmpfs limit
+is 75% of RAM (`copytoram_size=75%`).
+
+**Fix options:**
+1. Trim the squashfs — edit the `EXCLUDES` list in `arch2ram-create`
+   to drop more large directories (Steam libraries, models, datasets, …)
+2. Bump tmpfs cap — add `copytoram_size=85%` to the GRUB entry.
+3. Disable copytoram — change `copytoram=y` to `copytoram=n`. The squashfs
+   then stays on disk and is read on demand. Loses the "zero disk I/O"
+   property but works with any image size.
+
+---
+
+## GRUB syntax error after `arch2ram-install`
+
+**Symptom:** `grub-mkconfig` complains about a syntax error near a line
+in `grub.cfg`.
+
+**Root cause:** A previous version of `arch2ram-install` removed
+`menuentry` lines but left orphaned `linux`/`initrd`/`}` blocks.
+
+**Fix (already in current `arch2ram-install`):** the GRUB entry is
+rewritten via a Python parser that splits on `menuentry` boundaries and
+replaces the whole block atomically. If you have a hand-broken
+`40_custom`, open it and remove the orphaned lines, then re-run
+`arch2ram-install`.

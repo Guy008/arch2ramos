@@ -1,0 +1,66 @@
+#!/bin/bash
+# arch2ram-uninstall — remove everything arch2ramos installed
+#
+# Leaves alone:
+#   - mkinitcpio-archiso and squashfs-tools packages (might be wanted)
+#   - the squashfs file (size, valuable — removed only with --purge)
+#
+# Usage:
+#   sudo arch2ram-uninstall            (remove configs, initramfs, GRUB entry)
+#   sudo arch2ram-uninstall --purge    (also remove the squashfs)
+
+set -e
+
+PURGE=0
+[[ "$1" == "--purge" ]] && PURGE=1
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run as root: sudo $0 $*"
+    exit 1
+fi
+
+if [[ -f "/etc/grub.d/proxifiedScripts/custom" ]]; then
+    GRUB_CUSTOM="/etc/grub.d/proxifiedScripts/custom"
+else
+    GRUB_CUSTOM="/etc/grub.d/40_custom"
+fi
+
+LABEL="Arch Linux from RAM"
+
+echo "=== arch2ram-uninstall ==="
+echo ""
+
+echo "[1/4] Removing mkinitcpio config + preset..."
+rm -vf /etc/mkinitcpio.d/arch2ram.preset
+rm -vf /etc/arch2ram/mkinitcpio.conf
+rmdir --ignore-fail-on-non-empty /etc/arch2ram 2>/dev/null || true
+
+echo "[2/4] Removing initramfs..."
+rm -vf /boot/initramfs-arch2ram.img
+
+echo "[3/4] Removing GRUB entry..."
+if [[ -f "$GRUB_CUSTOM" ]]; then
+    python3 - "$GRUB_CUSTOM" "$LABEL" <<'PYEOF'
+import sys, re
+path, skip_label = sys.argv[1], sys.argv[2]
+content = open(path).read()
+parts = re.split(r'(?=^menuentry )', content, flags=re.MULTILINE)
+header = parts[0]
+entries = [p for p in parts[1:] if f'"{skip_label}"' not in p]
+open(path, 'w').write(header + "".join(entries))
+PYEOF
+    grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -E "^(Found|Done|Generating)" || true
+fi
+
+echo "[4/4] ${PURGE:+Removing}${PURGE:-Keeping} squashfs..."
+if (( PURGE )); then
+    rm -vrf /var/lib/arch2ram
+else
+    if [[ -d /var/lib/arch2ram ]]; then
+        echo "      kept at /var/lib/arch2ram ($(du -sh /var/lib/arch2ram | cut -f1))"
+        echo "      pass --purge to delete"
+    fi
+fi
+
+echo ""
+echo "=== Done ==="

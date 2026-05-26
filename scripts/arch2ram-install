@@ -1,201 +1,173 @@
 #!/bin/bash
-# arch2ram-install - install initrd + GRUB entry
-# Usage:
-#   sudo arch2ram-install              → Arch from RAM
-#   sudo arch2ram-install --batocera /path/to/batocera.img [UUID]
+# arch2ram-install — set up Arch Linux to boot from RAM via archiso hooks
+#
+# What it does:
+#   1. Installs deps: mkinitcpio-archiso, squashfs-tools
+#   2. Installs our mkinitcpio config + preset
+#   3. Builds /boot/initramfs-arch2ram.img
+#   4. Writes a GRUB entry that uses archiso boot params
+#   5. Regenerates /boot/grub/grub.cfg
+#
+# Usage:  sudo arch2ram-install
 
 set -e
 
-BOOT="/boot"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+CONF_SRC="${PROJECT_DIR}/mkinitcpio/arch2ram.conf"
+PRESET_SRC="${PROJECT_DIR}/mkinitcpio/arch2ram.preset"
+
+CONF_DST="/etc/arch2ram/mkinitcpio.conf"
+PRESET_DST="/etc/mkinitcpio.d/arch2ram.preset"
+INITRAMFS="/boot/initramfs-arch2ram.img"
+KERNEL_IMG="/boot/vmlinuz-linux"
+
 # Support both plain grub and grub-customizer setups
 if [[ -f "/etc/grub.d/proxifiedScripts/custom" ]]; then
     GRUB_CUSTOM="/etc/grub.d/proxifiedScripts/custom"
 else
     GRUB_CUSTOM="/etc/grub.d/40_custom"
 fi
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INITRD_SRC="${SCRIPT_DIR}/../initrd"
 
-ALPINE_MINI="/tmp/arch2ramos-alpine-base.tar.gz"
-ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-3.21.3-x86_64.tar.gz"
-
-MODE="arch"
-BATOCERA_IMG=""
-BATOCERA_HOME_UUID=""
-
-if [[ "$1" == "--batocera" ]]; then
-    MODE="batocera"
-    BATOCERA_IMG="$2"
-    BATOCERA_HOME_UUID="${3:-$(findmnt -n -o UUID /home)}"
-fi
+LABEL="Arch Linux from RAM"
 
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo $0 $*"
     exit 1
 fi
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# mkinitcpio uses pushd/popd internally — if our CWD is on a path root can't
+# traverse (e.g. NFS with root_squash), popd fails and the build aborts.
+cd / || exit 1
 
-build_initrd() {
-    local INIT_SCRIPT="$1"
-    local OUTPUT="$2"
+echo "=== arch2ram-install ==="
+echo ""
 
-    echo "[1/3] Getting Alpine musl busybox base..."
-    if [[ ! -f "$ALPINE_MINI" ]]; then
-        curl -sL -o "$ALPINE_MINI" "$ALPINE_URL"
-    fi
+# ── 1. Dependencies ──────────────────────────────────────────────────────────
 
-    local BUILD="/tmp/arch2ramos-initrd-build"
-    rm -rf "$BUILD"
-    mkdir -p "$BUILD"
-    tar -xzf "$ALPINE_MINI" -C "$BUILD" 2>/dev/null
-    mkdir -p "$BUILD"/{img_src,boot_root,squash_base,overlay_root,new_root,proc,sys,dev,run}
+echo "[1/5] Checking dependencies..."
+NEED=()
+pacman -Q mkinitcpio-archiso &>/dev/null || NEED+=(mkinitcpio-archiso)
+pacman -Q squashfs-tools     &>/dev/null || NEED+=(squashfs-tools)
+if (( ${#NEED[@]} )); then
+    echo "      installing: ${NEED[*]}"
+    pacman -S --needed --noconfirm "${NEED[@]}"
+else
+    echo "      OK (mkinitcpio-archiso, squashfs-tools present)"
+fi
 
-    cp "$INIT_SCRIPT" "$BUILD/init"
-    chmod 755 "$BUILD/init"
+# Sanity: kernel must exist
+if [[ ! -f "$KERNEL_IMG" ]]; then
+    echo "ERROR: $KERNEL_IMG not found — install the 'linux' package first."
+    exit 1
+fi
 
-    echo "      Adding kernel modules (loop, vfat, squashfs, overlay)..."
-    local KVER=$(uname -r)
-    local MODDIR="$BUILD/lib/modules/$KVER"
-    mkdir -p "$MODDIR"
-    local MODS=(loop fat vfat squashfs overlay)
-    for MOD in "${MODS[@]}"; do
-        local KO=$(find /lib/modules/$KVER -name "${MOD}.ko*" 2>/dev/null | head -1)
-        if [[ -n "$KO" ]]; then
-            # decompress zst if needed
-            if [[ "$KO" == *.zst ]]; then
-                zstd -d -q -o "$MODDIR/${MOD}.ko" "$KO"
-            else
-                cp "$KO" "$MODDIR/${MOD}.ko"
-            fi
-        fi
+# ── 2. Install mkinitcpio config + preset ────────────────────────────────────
+
+echo "[2/5] Installing mkinitcpio config + preset..."
+install -Dm644 "$CONF_SRC"   "$CONF_DST"
+install -Dm644 "$PRESET_SRC" "$PRESET_DST"
+echo "      $CONF_DST"
+echo "      $PRESET_DST"
+
+# ── 3. Build initramfs ───────────────────────────────────────────────────────
+
+echo "[3/5] Building initramfs (this takes ~30s)..."
+mkinitcpio -p arch2ram
+echo "      → $INITRAMFS ($(du -sh "$INITRAMFS" | cut -f1))"
+
+# ── 4. Determine boot params and add GRUB entry ──────────────────────────────
+
+ROOT_UUID="$(findmnt -n -o UUID /)"
+BOOT_SRC="$(findmnt -n -o SOURCE /boot 2>/dev/null || findmnt -n -o SOURCE /)"
+BOOT_UUID="$(blkid -s UUID -o value "$BOOT_SRC")"
+
+# If /boot is its own mount point, kernel/initrd paths are relative to its root.
+# Otherwise (/boot is a directory in /), prefix with /boot.
+if mountpoint -q /boot; then
+    KERNEL_PATH="/vmlinuz-linux"
+    INITRD_PATH="/initramfs-arch2ram.img"
+    INTEL_UCODE="/intel-ucode.img"
+    AMD_UCODE="/amd-ucode.img"
+else
+    KERNEL_PATH="/boot/vmlinuz-linux"
+    INITRD_PATH="/boot/initramfs-arch2ram.img"
+    INTEL_UCODE="/boot/intel-ucode.img"
+    AMD_UCODE="/boot/amd-ucode.img"
+fi
+
+# Microcode: include whichever ucode files are present (mirrors normal Arch boot).
+UCODE_LINES=""
+[[ -f "/boot/intel-ucode.img" ]] && UCODE_LINES+="    initrd ${INTEL_UCODE}"$'\n'
+[[ -f "/boot/amd-ucode.img"   ]] && UCODE_LINES+="    initrd ${AMD_UCODE}"$'\n'
+
+# Pull the user's existing kernel cmdline so we inherit hardware-specific
+# tunings (GPU selection on hybrid graphics, NVMe options, mitigations,
+# ipv6, microcode, …). We drop params that archiso owns (root=, rootfstype=,
+# resume= — RAM mode has no swap; rw — overlay is rw by default).
+EXTRA_CMDLINE=""
+SRC_CMDLINE=""
+if [[ -f /etc/kernel/cmdline ]]; then
+    SRC_CMDLINE="$(cat /etc/kernel/cmdline)"
+elif [[ -f /etc/default/grub ]]; then
+    # shellcheck disable=SC1091
+    SRC_CMDLINE="$(. /etc/default/grub; echo "$GRUB_CMDLINE_LINUX $GRUB_CMDLINE_LINUX_DEFAULT")"
+fi
+if [[ -n "$SRC_CMDLINE" ]]; then
+    for tok in $SRC_CMDLINE; do
+        case "$tok" in
+            root=*|rootfstype=*|resume=*|rw|ro|rootflags=*) ;;     # archiso handles these
+            *) EXTRA_CMDLINE+="${EXTRA_CMDLINE:+ }$tok" ;;
+        esac
     done
-    ls "$MODDIR/"
+fi
 
-    echo "[2/3] Packing initrd..."
-    (cd "$BUILD" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9) > "$OUTPUT"
-    echo "      → $OUTPUT ($(du -sh "$OUTPUT" | cut -f1))"
-}
+echo "[4/5] Writing GRUB entry to $GRUB_CUSTOM..."
+echo "      root UUID:    $ROOT_UUID"
+echo "      boot UUID:    $BOOT_UUID  (source: $BOOT_SRC)"
+echo "      kernel path:  $KERNEL_PATH"
+echo "      initrd path:  $INITRD_PATH"
+echo "      extra cmdline: ${EXTRA_CMDLINE:-<none>}"
 
-add_grub_entry() {
-    local LABEL="$1"
-    local INITRD_FILE="$2"
-    local NEW_ENTRY
-    NEW_ENTRY=$(cat << GRUBEOF
+NEW_ENTRY=$(cat <<GRUBEOF
 
 menuentry "${LABEL}" --class arch --class gnu-linux --class os {
-    insmod fat
     insmod part_gpt
-    set root='hd0,gpt1'
-    linux  /arch2ram-vmlinuz console=tty1 rdinit=/init quiet
-    initrd /arch2ram-initrd-ucode.img /${INITRD_FILE}
+    insmod fat
+    insmod ext2
+    search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
+    linux  ${KERNEL_PATH} archisobasedir=var/lib/arch2ram archisosearchuuid=${ROOT_UUID} copytoram=y cow_spacesize=2G${EXTRA_CMDLINE:+ }${EXTRA_CMDLINE}
+${UCODE_LINES}    initrd ${INITRD_PATH}
 }
 GRUBEOF
 )
 
-    # Rewrite the custom file: keep header + all entries except our label, then add updated entry
-    python3 - "$GRUB_CUSTOM" "$LABEL" "$NEW_ENTRY" << 'PYEOF'
-import sys, re
+# Rewrite the custom file: keep header + entries other than ours, append updated entry.
+python3 - "$GRUB_CUSTOM" "$LABEL" "$NEW_ENTRY" <<'PYEOF'
+import sys, re, os
 path, skip_label, new_entry = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     content = open(path).read()
 except FileNotFoundError:
-    content = "#!/bin/sh\nexec tail -n +3 $0\n# Custom GRUB entries\n"
+    content = "#!/bin/sh\nexec tail -n +3 $0\n# Custom GRUB entries — managed by arch2ram-install\n"
 parts = re.split(r'(?=^menuentry )', content, flags=re.MULTILINE)
 header = parts[0]
 entries = [p for p in parts[1:] if f'"{skip_label}"' not in p]
 result = header + "".join(entries) + new_entry + "\n"
 open(path, 'w').write(result)
+os.chmod(path, 0o755)
 PYEOF
 
-    chmod +x "$GRUB_CUSTOM"
-    echo "[3/3] Regenerating GRUB..."
-    grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null | grep -E "Found|Done|בוצע" || true
-    echo "      → GRUB updated"
-}
+# ── 5. Regenerate grub.cfg ───────────────────────────────────────────────────
 
-# ── copy kernel (shared) ─────────────────────────────────────────────────────
+echo "[5/5] Regenerating GRUB config..."
+grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -E "^(Found|Done|Generating)" || true
 
-copy_kernel() {
-    local KERNEL
-    # Prefer zen kernel; ls sorts alphabetically so don't use ls to pick
-    if [[ -f "/boot/vmlinuz-linux-zen" ]]; then
-        KERNEL="/boot/vmlinuz-linux-zen"
-    elif [[ -f "/boot/vmlinuz-linux" ]]; then
-        KERNEL="/boot/vmlinuz-linux"
-    else
-        echo "ERROR: no kernel found in /boot"; exit 1
-    fi
-    echo "      kernel: ${KERNEL} ($(strings "$KERNEL" | grep -m1 'Linux version' | cut -d' ' -f3))"
-    cp "$KERNEL" "${BOOT}/arch2ram-vmlinuz"
-
-    # intel-ucode concatenated initrd
-    if [[ -f "${BOOT}/intel-ucode.img" ]]; then
-        cp "${BOOT}/intel-ucode.img" "${BOOT}/arch2ram-initrd-ucode.img"
-    else
-        # empty placeholder
-        echo | cpio -o -H newc 2>/dev/null | gzip > "${BOOT}/arch2ram-initrd-ucode.img"
-    fi
-}
-
-# ── MODE: arch ───────────────────────────────────────────────────────────────
-
-if [[ "$MODE" == "arch" ]]; then
-    ROOT_DEV=$(findmnt -n -o SOURCE /)
-    ROOT_FSTYPE=$(findmnt -n -o FSTYPE /)
-    echo "=== arch2ram-install: Arch from RAM ==="
-    echo "Root device: ${ROOT_DEV} (${ROOT_FSTYPE})"
-    echo ""
-
-    INIT_TMP="/tmp/arch2ram-init-patched"
-    sed \
-        -e "s|REPLACE_WITH_ROOT_DEV|${ROOT_DEV}|" \
-        -e "s|REPLACE_WITH_ROOT_FSTYPE|${ROOT_FSTYPE}|" \
-        "${INITRD_SRC}/init" > "$INIT_TMP"
-    chmod +x "$INIT_TMP"
-
-    copy_kernel
-    build_initrd "$INIT_TMP" "${BOOT}/arch2ram-initrd.gz"
-    add_grub_entry "Arch Linux from RAM" "arch2ram-initrd.gz"
-
-    echo ""
-    echo "=== Done ==="
-    echo "Next: sudo arch2ram-create   (build the squashfs, ~5 min)"
-    echo "Then: reboot → 'Arch Linux from RAM'"
-fi
-
-# ── MODE: batocera ───────────────────────────────────────────────────────────
-
-if [[ "$MODE" == "batocera" ]]; then
-    if [[ -z "$BATOCERA_IMG" || ! -f "$BATOCERA_IMG" ]]; then
-        echo "Error: batocera.img not found at: $BATOCERA_IMG"
-        echo "Usage: sudo $0 --batocera /path/to/batocera.img"
-        exit 1
-    fi
-
-    IMG_PATH="${BATOCERA_IMG}"
-    IMG_DIR="$(dirname "$IMG_PATH")"
-    IMG_FILE_ON_PARTITION="${IMG_PATH#/home}"
-
-    echo "=== arch2ram-install: Batocera from RAM ==="
-    echo "Image:     ${IMG_PATH}"
-    echo "Home UUID: ${BATOCERA_HOME_UUID}"
-    echo ""
-
-    HOME_DEV=$(findmnt -n -o SOURCE /home 2>/dev/null || echo "/dev/sda4")
-    INIT_TMP="/tmp/batocera-init-patched"
-    sed \
-        -e "s|REPLACE_WITH_HOME_DEV|${HOME_DEV}|" \
-        -e "s|REPLACE_WITH_IMG_FILE|${IMG_FILE_ON_PARTITION}|" \
-        "${INITRD_SRC}/init-batocera" > "$INIT_TMP"
-    echo "    Device: ${HOME_DEV}, Image: ${IMG_FILE_ON_PARTITION}"
-    chmod +x "$INIT_TMP"
-
-    copy_kernel
-    build_initrd "$INIT_TMP" "${BOOT}/batocera-ram-initrd.gz"
-    add_grub_entry "Batocera from RAM" "batocera-ram-initrd.gz"
-
-    echo ""
-    echo "=== Done ==="
-    echo "Reboot → 'Batocera from RAM'"
-fi
+echo ""
+echo "=== Done ==="
+echo "Next: sudo arch2ram-create     (build the squashfs, ~5 min)"
+echo "Then: reboot → select 'Arch Linux from RAM' in GRUB"
+echo ""
+echo "Note: if GRUB_TIMEOUT in /etc/default/grub is too short (<5s)"
+echo "you may not have time to select the entry — bump it before rebooting."

@@ -1,17 +1,28 @@
 #!/bin/bash
-# arch2ram-create - build squashfs image from running Arch system
-# Run this from your regular disk-based Arch installation
-# Result: /arch-ram.sfs on your root partition
+# arch2ram-create — build the squashfs image of the running Arch system
+#
+# Result: /var/lib/arch2ram/x86_64/airootfs.sfs   (+ .sha512 checksum)
+#
+# Path layout matches the archiso convention:
+#   <bootmnt>/<archisobasedir>/<arch>/airootfs.sfs
+# which lets the archiso hook find it via:
+#   archisobasedir=var/lib/arch2ram archisosearchuuid=<ROOT_UUID>
+#
+# Run this from your regular disk-based Arch install, after pacman -Syu.
 
 set -e
 
-OUTPUT="/arch-ram.sfs"
-OUTPUT_TMP="/arch-ram.sfs.tmp"
-COMP="zstd"      # fast decompression = fast RAM boot
+ARCH="$(uname -m)"
+OUT_DIR="/var/lib/arch2ram/${ARCH}"
+OUTPUT="${OUT_DIR}/airootfs.sfs"
+OUTPUT_TMP="${OUTPUT}.tmp"
+CHECKSUM="${OUT_DIR}/airootfs.sha512"
+COMP="zstd"     # fast decompression — what matters at boot
 BLOCK="1M"
 
-# Directories to exclude from the squashfs
+# Things to keep on disk / out of RAM
 EXCLUDES=(
+    # Pseudo / runtime filesystems — must be excluded
     /proc
     /sys
     /dev
@@ -20,17 +31,28 @@ EXCLUDES=(
     /mnt
     /media
     /lost+found
-    /arch-ram.sfs
-    /arch-ram.sfs.tmp
-    /home                       # keep home on disk
-    /var/cache/pacman/pkg
-    /var/log
+    /home                              # personal files — stay on disk
+    /var/lib/arch2ram                  # don't include the squashfs in itself
+
+    # System-managed caches & logs — useless in a frozen image
+    /var/cache/pacman/pkg              # package cache (re-fetched from network)
+    /var/log                           # logs go to tmpfs in RAM mode anyway
     /var/tmp
-    /opt/cuda                   # GPU toolkit — too large, not needed in RAM
-    /opt/android-studio         # dev tool — not needed in RAM
-    /usr/share/locale           # ~850MB, keep only what's needed
-    /usr/share/doc              # documentation
-    /usr/lib/debug              # debug symbols
+    /var/lib/systemd/coredump          # crash dumps
+    /usr/lib/debug                     # debug symbols
+
+    # Default user trimmings (comment out anything you actually want in RAM)
+    /opt/cuda                          # NVIDIA compute toolkit (not on this system)
+    /opt/android-studio                # IDE — not needed at OS-bring-up time
+    /opt/rocm                          # AMD GPU compute (HIP/OpenCL) — skip unless doing ML
+    /opt/linux-guy                     # personal project dir — keep on disk
+    /usr/share/locale                  # most locales unused
+    /usr/share/doc                     # package documentation
+    /usr/share/man                     # manual pages
+    # /usr/share/icons and /usr/share/themes intentionally INCLUDED — on
+    # Wayland (KWin), excluding icon themes (esp. Adwaita) blocks rendering,
+    # leaves a black screen, and traps input inside an unresponsive compositor.
+    # Worth the ~940 MB cost.
 )
 
 if [[ $EUID -ne 0 ]]; then
@@ -39,29 +61,41 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if ! command -v mksquashfs &>/dev/null; then
-    echo "Install squashfs-tools: sudo pacman -S squashfs-tools"
+    echo "ERROR: mksquashfs not found — install squashfs-tools first."
+    echo "       sudo pacman -S squashfs-tools"
     exit 1
 fi
 
 echo "=== arch2ram-create ==="
-echo "Output: ${OUTPUT}"
-echo "Compression: ${COMP}"
+echo "Output:      $OUTPUT"
+echo "Compression: $COMP"
 echo ""
 
-# Build exclude args
+mkdir -p "$OUT_DIR"
+
 EXCL_ARGS=()
 for dir in "${EXCLUDES[@]}"; do
     EXCL_ARGS+=(-e "$dir")
 done
 
-echo "Building squashfs (this takes a few minutes)..."
-mksquashfs / "${OUTPUT_TMP}" \
-    -comp "${COMP}" \
-    -b "${BLOCK}" \
+echo "Building squashfs (this takes 3-8 minutes)..."
+mksquashfs / "$OUTPUT_TMP" \
+    -comp "$COMP" \
+    -b "$BLOCK" \
     -no-progress \
+    -noappend \
     "${EXCL_ARGS[@]}"
 
-mv "${OUTPUT_TMP}" "${OUTPUT}"
+mv -f "$OUTPUT_TMP" "$OUTPUT"
+
 echo ""
-echo "Done! Size: $(du -sh ${OUTPUT} | cut -f1)"
-echo "Run arch2ram-install to set up GRUB entry."
+echo "Computing checksum..."
+# archiso expects "airootfs.sha512" listing the .sfs by its basename
+( cd "$OUT_DIR" && sha512sum "airootfs.sfs" > "$CHECKSUM" )
+
+echo ""
+echo "Done."
+echo "  $OUTPUT  ($(du -sh "$OUTPUT" | cut -f1))"
+echo "  $CHECKSUM"
+echo ""
+echo "Reboot and pick 'Arch Linux from RAM' in GRUB."

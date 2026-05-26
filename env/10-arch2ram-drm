@@ -1,0 +1,23 @@
+#!/bin/bash
+# arch2ramos: force KWin/Mutter to use the amdgpu card explicitly.
+# In RAM mode the card numbering is shifted (simpledrm keeps minor 0),
+# so KWin's default DRM enumeration can't find the connected monitor.
+
+# Only act in RAM mode
+grep -q archisobasedir /proc/cmdline 2>/dev/null || exit 0
+
+# Find amdgpu's DRM card
+for d in /sys/class/drm/card[0-9]*; do
+    [[ -e "$d/device/uevent" ]] || continue
+    [[ ! "${d##*/}" =~ ^card[0-9]+$ ]] && continue   # skip connector subnodes
+    drv="$(readlink "$d/device/driver" 2>/dev/null | sed 's|.*/||')"
+    if [[ "$drv" == "amdgpu" ]]; then
+        cardname="${d##*/}"
+        echo "KWIN_DRM_DEVICES=/dev/dri/$cardname"
+        # Also set for Mutter / GNOME shell (in case GDM uses it for greeter)
+        echo "MUTTER_DEBUG_DRM_DEVICES=/dev/dri/$cardname"
+        # Wayland session debugging if needed
+        # echo "QT_LOGGING_RULES=kwin.drm.*=true"
+        break
+    fi
+done

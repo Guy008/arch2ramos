@@ -1,334 +1,183 @@
 # arch2ramos
 
-> **Run your OS entirely from RAM — boot in seconds, zero disk I/O, maximum speed.**
+> **Run your Arch install entirely from RAM — boot in seconds, zero disk I/O after boot, maximum speed.**
 
-This project was a years-long dream. This is the complete guide to making it real.
+The official Arch install ISO already does exactly what this project wants —
+it boots a full Arch system from a squashfs into RAM via overlayfs.
 
----
-
-## Table of Contents
-
-1. [The Idea](#the-idea)
-2. [How It Works](#how-it-works)
-3. [What We Proved](#what-we-proved)
-4. [Requirements](#requirements)
-5. [Installation Guide — Arch Linux from RAM](#installation-guide--arch-linux-from-ram)
-6. [Installation Guide — Batocera from RAM](#installation-guide--batocera-from-ram)
-7. [The Update Workflow](#the-update-workflow)
-8. [GRUB Menu — Switching Between Systems](#grub-menu--switching-between-systems)
-9. [Why This Works](#why-this-works)
+`arch2ramos` adapts the same proven mechanism to **your installed Arch
+system**: build a squashfs of your `/`, drop in an archiso-style initramfs,
+and add a GRUB entry. From then on you can switch between disk-Arch and
+RAM-Arch from the GRUB menu.
 
 ---
 
-## The Idea
+## How it works (the short version)
 
-Modern systems have 32GB of RAM. A full Linux desktop fits in 5-8GB.
-**That leaves 24GB of RAM completely idle.**
+The pieces that make this work are not invented here — they're the same
+pieces Arch's own install medium uses:
 
-What if you ran the OS itself from RAM?
+- **`mkinitcpio-archiso`** — official Arch package providing the
+  `archiso` initcpio hook. The hook can find a squashfs by UUID, copy it
+  into a tmpfs, mount it via loop, and set up an overlayfs over it.
+- **`mkinitcpio`** — builds our initramfs (`/boot/initramfs-arch2ram.img`)
+  against the kernel you already have installed.
+- **`mksquashfs`** — packs your running `/` into a compressed read-only image.
+- **GRUB** — provides a second menu entry alongside your normal one.
 
-- Boot in seconds (squashfs loads to RAM once)
-- Zero disk I/O during runtime (everything in RAM)
-- All writes go to a RAM overlay (tmpfs) — disk stays untouched
-- Switch between disk-Arch and RAM-Arch from GRUB
-- Update the RAM image from the disk system
+What we add:
 
-This is not a VM. This is not a container.
-The OS runs natively — kernel, systemd, everything — **from RAM**.
-
----
-
-## How It Works
-
-### The Stack
-
-```
-GRUB
-├── Arch Linux (disk)      ← normal use, updates, all 32GB RAM free
-└── Arch Linux (RAM)       ← maximum speed, writes to tmpfs
-```
-
-### The Boot Flow (RAM mode)
-
-```
-GRUB loads:
-  arch2ram-vmlinuz    (the kernel)
-  arch2ram-initrd.gz  (tiny initrd with ash + losetup)
-         ↓
-  initrd mounts root partition (read-only)
-         ↓
-  finds arch-ram.sfs (squashfs of your entire system)
-         ↓
-  mounts squashfs as read-only base layer
-         ↓
-  creates tmpfs overlay (writes go to RAM)
-         ↓
-  overlayfs = squashfs base + tmpfs writes = full r/w system
-         ↓
-  switch_root → /sbin/init → systemd → your desktop
-```
-
-### The Initrd
-
-The initrd is built from **Alpine Linux minirootfs** — because Alpine uses
-statically-linked musl busybox. This means it works reliably without depending
-on any host libraries. It contains:
-
-- `ash` shell
-- `mount` with squashfs, overlay, loop support
-- `losetup` for loop devices
-- `switch_root` to hand off to the real OS
-- `libc.musl-x86_64.so.1` + `ld-musl-x86_64.so.1`
+1. A small `mkinitcpio` preset that uses the archiso hooks.
+2. Two scripts: `arch2ram-install` (one-time setup) and
+   `arch2ram-create` (rebuild the squashfs after updates).
+3. A GRUB menuentry generator.
 
 ---
 
-## What We Proved
-
-**April 2026 — Proof of concept successful.**
-
-Custom initrd booted from GRUB, using Arch zen kernel + Alpine musl busybox:
+## Boot flow
 
 ```
-=== Alpine RAM initrd - WORKING ===
-Kernel: 6.19.11-zen1-1-zen
-Mem:  31.1G total | 104.8M used | 30.9G free
-~ #
+GRUB → "Arch Linux from RAM"
+  ↓
+/boot/vmlinuz-linux + /boot/initramfs-arch2ram.img
+  ↓
+archiso hook in the initramfs:
+   ├─ finds the source partition by UUID
+   ├─ copies airootfs.sfs into tmpfs   (copytoram=y)
+   ├─ loop-mounts the squashfs (ro)
+   ├─ mounts a 2 GiB tmpfs as cowspace for writes
+   └─ overlayfs: lowerdir=squashfs, upperdir=cowspace → /new_root
+  ↓
+switch_root /new_root /sbin/init
+  ↓
+systemd boots your normal Arch desktop, on top of the overlay
 ```
 
-104MB used. 30.9GB free. Shell running from RAM.
-The foundation works. Now we build on it.
+See `docs/boot-flow.md` for the annotated version with all the params.
 
 ---
 
 ## Requirements
 
-- **RAM:** 32GB (16GB for OS image, ~16GB free for your processes)
-- **Disk:** Arch Linux installation (source system)
-- **Bootloader:** GRUB
-- **Package:** `squashfs-tools` (`sudo pacman -S squashfs-tools`)
+- **Arch Linux** as the host system (you'll install from the running install).
+- **RAM:** enough to fit the squashfs + your runtime workload. A 32 GB
+  desktop with a ~5 GB squashfs leaves you ~17 GB free for applications.
+- **GRUB** as the bootloader.
+- Packages (auto-installed by `arch2ram-install`):
+  `mkinitcpio-archiso`, `squashfs-tools`.
 
 ---
 
-## Installation Guide — Arch Linux from RAM
-
-### Step 0: Fresh Arch install
-
-Install Arch Linux normally. Set up everything you want in your RAM system:
-desktop environment, packages, configs. This becomes the RAM image.
-
-Recommended partition layout:
-```
-sda1  FAT32   512MB    /boot         (EFI + GRUB)
-sda2  ext4    40GB+    /             (system + squashfs file lives here)
-sda3  btrfs   rest     /home         (personal files — NOT in RAM image)
-```
-
-### Step 1: Clone this repo
+## Install
 
 ```bash
 git clone https://github.com/Guy008/arch2ramos.git
 cd arch2ramos
-```
 
-### Step 2: Install (sets up initrd + GRUB entry)
+sudo scripts/arch2ram-install      # one-time: deps + initramfs + GRUB entry
+sudo scripts/arch2ram-create       # build the squashfs of your current system (~5 min)
 
-```bash
-sudo scripts/arch2ram-install
-```
+# bump GRUB timeout if needed so you have time to pick the entry:
+sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=10/' /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
 
-This will:
-- Download Alpine minirootfs (3.4MB) as the initrd base
-- Build `arch2ram-initrd.gz` and copy to `/boot`
-- Copy kernel to `/boot/arch2ram-vmlinuz`
-- Add "Arch Linux from RAM" entry to GRUB
-
-### Step 3: Create the squashfs image
-
-```bash
-sudo scripts/arch2ram-create
-```
-
-This runs `mksquashfs /` and creates `/arch-ram.sfs` on your root partition.
-Takes 3-8 minutes depending on system size. Typical output: 4-7GB (zstd compressed).
-
-**What's excluded from the image:**
-- `/home` — stays on disk, mounted normally
-- `/proc`, `/sys`, `/dev`, `/run`, `/tmp`
-- `/var/cache/pacman/pkg` — no need to RAM-boot the package cache
-- `/var/log` — logs go to tmpfs in RAM mode
-
-### Step 4: Reboot
-
-```bash
 reboot
+# pick "Arch Linux from RAM" in the GRUB menu
 ```
-
-In GRUB, select **"Arch Linux from RAM"**.
-
-You'll see:
-```
-=== arch2ramos: booting Arch from RAM ===
-[1/5] Mounting source partition...
-[2/5] Mounting squashfs from RAM image...
-[3/5] Setting up overlayfs (writes go to RAM)...
-[4/5] Moving mounts into new root...
-[5/5] Switching to Arch root...
-```
-
-Then systemd takes over and boots normally — but everything is in RAM.
 
 ---
 
-## Installation Guide — Batocera from RAM
+## What `arch2ram-install` writes
 
-Batocera packages its OS as a squashfs inside a FAT32 partition inside a `.img.gz` file.
-We exploit this directly.
+| File                                       | Purpose                                  |
+|--------------------------------------------|------------------------------------------|
+| `/etc/arch2ram/mkinitcpio.conf`            | hooks + compression for our initramfs    |
+| `/etc/mkinitcpio.d/arch2ram.preset`        | preset (picked up by pacman hook)        |
+| `/boot/initramfs-arch2ram.img`             | the archiso-style initramfs              |
+| `/etc/grub.d/40_custom` entry              | "Arch Linux from RAM" menuentry          |
 
-### Step 1: Download Batocera
+(Path of the custom GRUB file is auto-detected: `proxifiedScripts/custom`
+when grub-customizer is in use.)
 
-```bash
-mkdir -p ~/batocera-ram
-cd ~/batocera-ram
-curl -L -o batocera.img.gz \
-  "https://mirrors.o2switch.fr/batocera/x86_64/stable/last/batocera-x86_64-42-20251006.img.gz"
-```
+## What `arch2ram-create` writes
 
-### Step 2: Decompress
+| File                                          | Purpose                              |
+|-----------------------------------------------|--------------------------------------|
+| `/var/lib/arch2ram/x86_64/airootfs.sfs`       | the compressed system image          |
+| `/var/lib/arch2ram/x86_64/airootfs.sha512`    | checksum (used if `checksum=y` set)  |
 
-```bash
-zcat batocera.img.gz > batocera.img
-# Result: ~11GB raw disk image
-```
-
-### Step 3: Install Batocera GRUB entry
-
-```bash
-sudo scripts/arch2ram-install --batocera ~/batocera-ram/batocera.img
-```
-
-This sets up a GRUB entry that:
-1. Mounts your home partition (btrfs)
-2. Sets up a loop device on `batocera.img`
-3. Mounts the FAT32 BATOCERA partition from within the image
-4. Mounts the squashfs + overlayfs
-5. `switch_root` into Batocera
-
-### Step 4: Reboot → "Batocera from RAM"
-
-Batocera boots entirely from RAM. EmulationStation starts.
-ROMs stay on disk/USB — only the OS is in RAM.
+The path layout matches the archiso convention
+(`<archisobasedir>/<arch>/airootfs.sfs`), which is what the GRUB entry's
+`archisobasedir=var/lib/arch2ram` tells the hook to look for.
 
 ---
 
-## The Update Workflow
-
-### Update Arch RAM image
+## Update workflow
 
 ```bash
-# 1. Boot into disk Arch
-# 2. Do your updates
+# 1. Boot into disk Arch (normal GRUB entry).
 sudo pacman -Syu
-# install new packages, change configs, etc.
 
-# 3. Rebuild the RAM image
-sudo arch2ramos/scripts/arch2ram-create
+# 2. Rebuild the squashfs so the RAM image carries the updates.
+sudo arch2ram-create
 
-# 4. Reboot into RAM
+# 3. Reboot → "Arch Linux from RAM".
 reboot
 ```
 
-### Update Batocera
+The initramfs auto-rebuilds via the pacman mkinitcpio hook on kernel
+updates — you don't need to re-run `arch2ram-install`. The squashfs is a
+frozen snapshot, so it does need a manual `arch2ram-create` after
+significant updates (especially kernel updates — the modules in the
+squashfs must match the kernel that boots).
+
+---
+
+## Boot params used (and how to override)
+
+The GRUB entry passes:
+
+| Param                              | Value             | Why                                                |
+|------------------------------------|-------------------|----------------------------------------------------|
+| `archisobasedir=var/lib/arch2ram`  | path prefix       | where on the source partition the squashfs lives   |
+| `archisosearchuuid=<ROOT_UUID>`    | filesystem UUID   | partition the hook should mount                    |
+| `copytoram=y`                      | force-copy to RAM | otherwise archiso's `auto` mode gives up on >4 GiB |
+| `cow_spacesize=2G`                 | overlay capacity  | default 256 MiB fills up fast on a desktop session |
+
+Full param reference: see `/usr/share/doc/mkinitcpio-archiso/README.bootparams`
+after installing the package.
+
+---
+
+## Uninstall
 
 ```bash
-cd ~/batocera-ram
-# Download new version
-curl -L -o batocera-new.img.gz "https://..."
-zcat batocera-new.img.gz > batocera.img
-# Next RAM boot uses the new image automatically
+sudo scripts/arch2ram-uninstall            # remove config + GRUB entry
+sudo scripts/arch2ram-uninstall --purge    # also delete /var/lib/arch2ram
 ```
 
 ---
 
-## GRUB Menu — Switching Between Systems
-
-After installation, your GRUB will look like:
-
-```
-┌─────────────────────────────────────┐
-│  Arch Linux                         │  ← disk, normal boot
-│  Arch Linux (advanced options)      │
-│  ─────────────────────────────────  │
-│  Arch Linux from RAM            ←   │  ← RAM boot, maximum speed
-│  Batocera from RAM              ←   │  ← gaming OS from RAM
-│  ─────────────────────────────────  │
-│  Windows Boot Manager               │
-└─────────────────────────────────────┘
-```
-
-Switch anytime. Each system is fully independent.
-
-**The bonus:** While running disk-Arch, you have all 32GB RAM for your processes.
-While running RAM-Arch, the OS uses ~5-8GB, leaving ~24GB free.
-
----
-
-## Why This Works
-
-### RAM speed vs disk speed
-
-| Storage | Read speed |
-|---------|-----------|
-| NVMe SSD | ~3,500 MB/s |
-| RAM (DDR4) | ~40,000 MB/s |
-
-RAM is **10x faster** than the fastest SSD for random reads.
-Every file open, every library load, every config read — instant.
-
-### squashfs + overlayfs
-
-- **squashfs**: read-only compressed filesystem. Your 15GB system compresses to ~5GB.
-  Mounted directly — no extraction needed.
-- **overlayfs**: stacks a read-write tmpfs on top of the read-only squashfs.
-  Writes go to RAM. Reads come from the squashfs base.
-  The running system sees a normal read-write filesystem.
-
-### Why not just tmpfs?
-
-Extracting the entire system to tmpfs would take minutes and use more RAM.
-squashfs stays compressed in RAM — the kernel decompresses pages on demand.
-With zstd compression, decompression is near-instant.
-
-### The initrd trick
-
-Standard initrds extract themselves and hand off to the OS.
-Ours does something different:
-1. Mounts the disk partition (read-only)
-2. Mounts the squashfs from a file on that partition
-3. Creates an overlayfs
-4. `switch_root` — the kernel switches to the new root and discards the initrd
-
-The entire setup happens before systemd even starts.
-
----
-
-## Project Structure
+## Project layout
 
 ```
 arch2ramos/
-├── README.md                  ← you are here
-├── initrd/
-│   ├── init                   ← Arch boot script
-│   └── init-batocera          ← Batocera boot script
+├── README.md                       ← you are here
+├── mkinitcpio/
+│   ├── arch2ram.conf               → /etc/arch2ram/mkinitcpio.conf
+│   └── arch2ram.preset             → /etc/mkinitcpio.d/arch2ram.preset
 ├── scripts/
-│   ├── arch2ram-create        ← build squashfs from running system
-│   ├── arch2ram-install       ← install initrd + GRUB entry
-│   └── arch2ram-update        ← update existing squashfs
+│   ├── arch2ram-install            one-time setup
+│   ├── arch2ram-create             build/refresh the squashfs
+│   └── arch2ram-uninstall          clean removal
 ├── grub/
-│   └── menuentry.example      ← GRUB entry template
+│   └── menuentry.example           manual-install template
 └── docs/
-    └── boot-flow.md           ← detailed architecture notes
+    ├── boot-flow.md                detailed boot annotated step-by-step
+    └── troubleshooting.md          common failure modes
 ```
 
 ---
 
-*Built from scratch, one layer at a time. From dream to working shell prompt.*
+*Boots in seconds. Runs from RAM. Same mechanism the Arch installer uses,
+applied to your own system.*

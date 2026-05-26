@@ -1,16 +1,34 @@
-# arch2ramos GRUB entries
-# arch2ram-install writes this automatically.
-# Manual install: add to /etc/grub.d/40_custom (or proxifiedScripts/custom if using grub-customizer)
-# then run: sudo grub-mkconfig -o /boot/grub/grub.cfg
+# arch2ramos — GRUB menuentry template
 #
-# IMPORTANT: ensure GRUB_TIMEOUT in /etc/default/grub is long enough (>=5s)
-# to select this entry before the default boots.
+# arch2ram-install writes this automatically based on your system's UUIDs.
+# This file is for reference, manual setups, and troubleshooting.
+#
+# Boot params (from mkinitcpio-archiso, see /usr/share/doc/mkinitcpio-archiso/README.bootparams):
+#   archisobasedir=<dir>      directory inside the source partition that holds
+#                             <arch>/airootfs.sfs  (we use: var/lib/arch2ram)
+#   archisosearchuuid=<UUID>  UUID of the partition holding the squashfs
+#   copytoram=y               force-copy the squashfs to tmpfs before mounting
+#                             (default is "auto" which gives up on images >4 GiB)
+#   cow_spacesize=2G          size of the tmpfs holding overlayfs writes
+#                             (default 256M fills up fast on a desktop session)
+#
+# Manual install:
+#   - replace BOOT_UUID with the UUID of the partition where the kernel +
+#     initramfs live (typically your /boot, possibly your ESP)
+#   - replace ROOT_UUID with the UUID of the partition where airootfs.sfs lives
+#     (typically your /)
+#   - drop into /etc/grub.d/40_custom (or proxifiedScripts/custom for grub-customizer)
+#   - sudo grub-mkconfig -o /boot/grub/grub.cfg
+#
+# IMPORTANT: GRUB_TIMEOUT in /etc/default/grub must be long enough (>=5s)
+# to give you time to select the entry before the default auto-boots.
 
-# --- Arch Linux from RAM ---
 menuentry "Arch Linux from RAM" --class arch --class gnu-linux --class os {
-    insmod fat
     insmod part_gpt
-    set root='hd0,gpt1'
-    linux  /arch2ram-vmlinuz console=tty0 console=tty1 rdinit=/init nomodeset
-    initrd /arch2ram-initrd-ucode.img /arch2ram-initrd.gz
+    insmod fat
+    insmod ext2
+    search --no-floppy --fs-uuid --set=root BOOT_UUID
+    linux  /vmlinuz-linux archisobasedir=var/lib/arch2ram archisosearchuuid=ROOT_UUID copytoram=y cow_spacesize=2G
+    initrd /intel-ucode.img
+    initrd /initramfs-arch2ram.img
 }
