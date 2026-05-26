@@ -25,4 +25,4 @@ export LANG=he_IL.UTF-8
 export LC_CTYPE=he_IL.UTF-8
 
 # Launch hyprland with our RAM-aware config wrapper
-exec hyprland --config /etc/arch2ram/hyprland-ram.conf
+exec setpriv --ambient-caps '-all' hyprland --config /etc/arch2ram/hyprland-ram.conf

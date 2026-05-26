@@ -8,6 +8,7 @@ After=getty@tty1.service
 
 [Service]
 Type=simple
+AmbientCapabilities=
 User=Guy008
 Group=Guy008
 PAMName=login
