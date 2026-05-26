@@ -1,0 +1,69 @@
+#!/bin/bash
+# arch2ramos: gamescope as the primary compositor + Steam Big Picture as launcher.
+#
+# This is the SteamOS-style mode: gamescope owns DRM directly (no hyprland,
+# no cage, no KDE), and Steam Big Picture serves as the launcher. Any
+# non-Steam app can be added as a "Non-Steam Game" in Steam and launched
+# from BPM. EmulationStation can replace this launcher later.
+
+set -e
+
+# Wait for DRM devices to settle (drm-fixup runs before us)
+for _ in 1 2 3 4 5; do
+    [[ -e /dev/dri/card0 ]] && break
+    sleep 0.5
+done
+
+# Wayland runtime dir
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+fi
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=gamescope
+
+# Hebrew/English XKB (Alt+Shift to toggle)
+export XKB_DEFAULT_LAYOUT=us,il
+export XKB_DEFAULT_OPTIONS=grp:alt_shift_toggle
+
+# Locale
+export LANG=he_IL.UTF-8
+export LC_CTYPE=he_IL.UTF-8
+
+# MangoHud overlay (toggle inside Steam with Shift+F12 if desired)
+export MANGOHUD=1
+
+# Output resolution + refresh — read from EDID if possible, else 4K@60
+# Use the user's TV native by querying connected outputs at runtime.
+WIDTH=3840
+HEIGHT=2160
+RATE=60
+
+# Optional cmdline overrides:  arch2ram.gs.res=1920x1080  arch2ram.gs.rate=120
+if [[ -r /proc/cmdline ]]; then
+    res="$(grep -oE 'arch2ram\.gs\.res=[0-9]+x[0-9]+' /proc/cmdline | tail -1 | cut -d= -f2)"
+    [[ -n "$res" ]] && { WIDTH="${res%x*}"; HEIGHT="${res#*x}"; }
+    rate="$(grep -oE 'arch2ram\.gs\.rate=[0-9]+' /proc/cmdline | tail -1 | cut -d= -f2)"
+    [[ -n "$rate" ]] && RATE="$rate"
+fi
+
+# Pick launcher — Steam Big Picture by default.
+# Override via cmdline:  arch2ram.gs.launcher=/path/to/binary
+LAUNCHER="/usr/bin/steam -bigpicture"
+if cmdline_launcher="$(grep -oE 'arch2ram\.gs\.launcher=[^ ]+' /proc/cmdline | tail -1)"; then
+    [[ -n "$cmdline_launcher" ]] && LAUNCHER="${cmdline_launcher#*=}"
+fi
+
+echo "arch2ram-gamescope: ${WIDTH}x${HEIGHT}@${RATE} launching: $LAUNCHER"
+
+# Drop ambient caps so bwrap (Steam runtime, glycin, etc.) doesn't refuse to run.
+exec setpriv --ambient-caps '-all' \
+    gamescope \
+        -W "$WIDTH" -H "$HEIGHT" -r "$RATE" \
+        -f \
+        --force-grab-cursor \
+        --mangoapp \
+        --adaptive-sync \
+        -- \
+        $LAUNCHER

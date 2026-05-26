@@ -1,18 +1,20 @@
 #!/bin/bash
 # arch2ram-install — set up Arch Linux to boot from RAM via archiso hooks
 #
-# Installs three boot modes (added to GRUB based on what's available):
-#   1. Arch Linux from RAM (kiosk)    — cage compositor, single fullscreen app
-#   2. Arch Linux from RAM (hyprland) — multi-window desktop (if hyprland installed)
-#   3. Arch Linux from RAM (debug TTY)— multi-user.target only, ssh/diagnostics
+# Installs up to four boot modes (added to GRUB based on what's available):
+#   1. Arch Linux from RAM (gamescope) — gamescope + Steam Big Picture (default)
+#   2. Arch Linux from RAM (kiosk)     — cage compositor, single fullscreen app
+#   3. Arch Linux from RAM (hyprland)  — multi-window desktop (if hyprland installed)
+#   4. Arch Linux from RAM (debug TTY) — multi-user.target only, ssh/diagnostics
 #
-# All three modes share:
+# All modes share:
 #   - the same squashfs root (built by arch2ram-create)
 #   - the simpledrm-unbind workaround (arch2ram-drm-fixup) for hybrid GPUs
 #   - inherited kernel cmdline (GPU tuning, mitigations, nvme, etc.)
 #
 # Usage:
-#   sudo arch2ram-install                 (full install — kiosk + maybe hyprland + debug)
+#   sudo arch2ram-install                 (full install — gamescope as default)
+#   sudo arch2ram-install --no-gamescope  (skip gamescope install + entry)
 #   sudo arch2ram-install --no-kiosk      (skip cage install + kiosk entry)
 #   sudo arch2ram-install --no-hyprland   (don't add hyprland entry even if installed)
 
@@ -27,9 +29,11 @@ PRESET_SRC="${PROJECT_DIR}/mkinitcpio/arch2ram.preset"
 DRM_FIXUP_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-drm-fixup"
 KIOSK_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-kiosk"
 HYPRLAND_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-hyprland"
+GAMESCOPE_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-gamescope"
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
+GAMESCOPE_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-gamescope.service"
 DRM_ENVGEN_SRC="${PROJECT_DIR}/env/10-arch2ram-drm"
 KONSOLE_PROFILE_SRC="${PROJECT_DIR}/konsole/arch2ram-kiosk.profile"
 HYPRLAND_CONF_SRC="${PROJECT_DIR}/hyprland/hyprland-ram.conf"
@@ -42,12 +46,21 @@ KERNEL_IMG="/boot/vmlinuz-linux"
 DRM_FIXUP_SCRIPT_DST="/usr/local/bin/arch2ram-drm-fixup"
 KIOSK_SCRIPT_DST="/usr/local/bin/arch2ram-kiosk"
 HYPRLAND_SCRIPT_DST="/usr/local/bin/arch2ram-hyprland"
+GAMESCOPE_SCRIPT_DST="/usr/local/bin/arch2ram-gamescope"
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
 HYPRLAND_UNIT_DST="/etc/systemd/system/arch2ram-hyprland.service"
+GAMESCOPE_UNIT_DST="/etc/systemd/system/arch2ram-gamescope.service"
 DRM_ENVGEN_DST="/etc/systemd/user-environment-generators/10-arch2ram-drm"
 KONSOLE_PROFILE_DST="/usr/share/konsole/arch2ram-kiosk.profile"
 HYPRLAND_CONF_DST="/etc/arch2ram/hyprland-ram.conf"
+
+# Also install arch2ram-update + arch2ram-create as system commands so the
+# disk-mode update cycle ("sudo arch2ram-update") works from anywhere.
+UPDATE_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-update"
+CREATE_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-create"
+UPDATE_SCRIPT_DST="/usr/local/bin/arch2ram-update"
+CREATE_SCRIPT_DST="/usr/local/bin/arch2ram-create"
 
 # Support both plain grub and grub-customizer setups
 if [[ -f "/etc/grub.d/proxifiedScripts/custom" ]]; then
@@ -57,19 +70,24 @@ else
 fi
 
 # Mode labels (used both for entry creation and for cleanup of older versions)
+LABEL_GAMESCOPE="Arch Linux from RAM (gamescope)"
 LABEL_KIOSK="Arch Linux from RAM (kiosk)"
 LABEL_HYPRLAND="Arch Linux from RAM (hyprland)"
 LABEL_DEBUG="Arch Linux from RAM (debug TTY)"
 LABEL_LEGACY="Arch Linux from RAM"   # old single-entry name, scrubbed if found
 
 # Parse flags
+WANT_GAMESCOPE=1
 WANT_KIOSK=1
 WANT_HYPRLAND=auto    # 1=force, 0=skip, auto=enable iff hyprland is installed
+DEFAULT_MODE=gamescope    # which entry to put first (becomes GRUB default)
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-kiosk)    WANT_KIOSK=0 ;;
-        --no-hyprland) WANT_HYPRLAND=0 ;;
+        --no-gamescope)  WANT_GAMESCOPE=0; [[ "$DEFAULT_MODE" == "gamescope" ]] && DEFAULT_MODE=kiosk ;;
+        --no-kiosk)      WANT_KIOSK=0; [[ "$DEFAULT_MODE" == "kiosk" ]] && DEFAULT_MODE=hyprland ;;
+        --no-hyprland)   WANT_HYPRLAND=0 ;;
         --with-hyprland) WANT_HYPRLAND=1 ;;
+        --default=*)     DEFAULT_MODE="${1#*=}" ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's|^# \?||'
             exit 0
@@ -97,6 +115,11 @@ echo "[1/6] Checking dependencies..."
 NEED=()
 pacman -Q mkinitcpio-archiso &>/dev/null || NEED+=(mkinitcpio-archiso)
 pacman -Q squashfs-tools     &>/dev/null || NEED+=(squashfs-tools)
+if (( WANT_GAMESCOPE )); then
+    pacman -Q gamescope      &>/dev/null || NEED+=(gamescope)
+    pacman -Q steam          &>/dev/null || NEED+=(steam)
+    pacman -Q mangohud       &>/dev/null || NEED+=(mangohud)
+fi
 if (( WANT_KIOSK )); then
     pacman -Q cage           &>/dev/null || NEED+=(cage)
     pacman -Q konsole        &>/dev/null || NEED+=(konsole)
@@ -168,6 +191,20 @@ else
     echo "      hyprland: skipped (not installed or disabled by flag)"
 fi
 
+# Gamescope (gamescope + Steam Big Picture launcher)
+if (( WANT_GAMESCOPE )); then
+    install -Dm755 "$GAMESCOPE_SCRIPT_SRC" "$GAMESCOPE_SCRIPT_DST"
+    install -Dm644 "$GAMESCOPE_UNIT_SRC"   "$GAMESCOPE_UNIT_DST"
+    systemctl enable arch2ram-gamescope.service >/dev/null 2>&1 || true
+    echo "      gamescope: script + service (Steam Big Picture launcher)"
+fi
+
+# arch2ram-update (used from disk-mode for the refresh cycle) +
+# arch2ram-create (so it's on PATH for arch2ram-update to find)
+install -Dm755 "$UPDATE_SCRIPT_SRC" "$UPDATE_SCRIPT_DST"
+install -Dm755 "$CREATE_SCRIPT_SRC" "$CREATE_SCRIPT_DST"
+echo "      arch2ram-update + arch2ram-create installed to /usr/local/bin/"
+
 # ── 4. Build initramfs ───────────────────────────────────────────────────────
 
 echo "[4/6] Building initramfs (this takes ~30s)..."
@@ -236,24 +273,45 @@ ${UCODE_LINES}    initrd ${INITRD_PATH}
 GRUBEOF
 }
 
-# Build the entries
+# Build the entries — emit DEFAULT_MODE first so it lands at GRUB index 0
 NEW_ENTRIES=""
 LABELS_TO_REPLACE=("$LABEL_LEGACY" "$LABEL_DEBUG")
-if (( WANT_KIOSK )); then
-    NEW_ENTRIES+="$(emit_entry "$LABEL_KIOSK" "systemd.unit=multi-user.target arch2ram.mode=kiosk")"$'\n'
-    LABELS_TO_REPLACE+=("$LABEL_KIOSK")
-fi
-if (( HAS_HYPRLAND )); then
-    NEW_ENTRIES+="$(emit_entry "$LABEL_HYPRLAND" "systemd.unit=multi-user.target arch2ram.mode=hyprland")"$'\n'
-    LABELS_TO_REPLACE+=("$LABEL_HYPRLAND")
-fi
+
+emit_mode() {
+    local mode="$1"
+    case "$mode" in
+        gamescope)
+            (( WANT_GAMESCOPE )) || return 0
+            NEW_ENTRIES+="$(emit_entry "$LABEL_GAMESCOPE" "systemd.unit=multi-user.target arch2ram.mode=gamescope")"$'\n'
+            LABELS_TO_REPLACE+=("$LABEL_GAMESCOPE")
+            ;;
+        kiosk)
+            (( WANT_KIOSK )) || return 0
+            NEW_ENTRIES+="$(emit_entry "$LABEL_KIOSK" "systemd.unit=multi-user.target arch2ram.mode=kiosk")"$'\n'
+            LABELS_TO_REPLACE+=("$LABEL_KIOSK")
+            ;;
+        hyprland)
+            (( HAS_HYPRLAND )) || return 0
+            NEW_ENTRIES+="$(emit_entry "$LABEL_HYPRLAND" "systemd.unit=multi-user.target arch2ram.mode=hyprland")"$'\n'
+            LABELS_TO_REPLACE+=("$LABEL_HYPRLAND")
+            ;;
+    esac
+}
+
+# Default mode first (becomes GRUB index 0), then the rest in canonical order.
+emit_mode "$DEFAULT_MODE"
+for m in gamescope kiosk hyprland; do
+    [[ "$m" == "$DEFAULT_MODE" ]] && continue
+    emit_mode "$m"
+done
 NEW_ENTRIES+="$(emit_entry "$LABEL_DEBUG" "systemd.unit=multi-user.target")"$'\n'
 
 echo "[5/6] Writing GRUB entries to $GRUB_CUSTOM..."
 echo "      boot UUID:    $BOOT_UUID  (source: $BOOT_SRC)"
 echo "      root UUID:    $ROOT_UUID"
 echo "      kernel path:  $KERNEL_PATH"
-echo "      modes:        kiosk=$WANT_KIOSK hyprland=$HAS_HYPRLAND debug=1"
+echo "      modes:        gamescope=$WANT_GAMESCOPE kiosk=$WANT_KIOSK hyprland=$HAS_HYPRLAND debug=1"
+echo "      default:      $DEFAULT_MODE"
 
 # Rewrite custom file: keep header + entries with labels not in our managed set,
 # then append our entries.
@@ -290,12 +348,17 @@ echo ""
 echo "=== Done ==="
 echo ""
 echo "Boot modes installed:"
-(( WANT_KIOSK ))    && echo "  • $LABEL_KIOSK   (cage, single fullscreen app)"
-(( HAS_HYPRLAND )) && echo "  • $LABEL_HYPRLAND (multi-window desktop)"
+(( WANT_GAMESCOPE )) && echo "  • $LABEL_GAMESCOPE (gamescope + Steam Big Picture)"
+(( WANT_KIOSK ))     && echo "  • $LABEL_KIOSK   (cage, single fullscreen app)"
+(( HAS_HYPRLAND ))   && echo "  • $LABEL_HYPRLAND (multi-window desktop)"
 echo "  • $LABEL_DEBUG (tty only, ssh/diagnostics)"
+echo ""
+echo "  Default (GRUB index 0): $DEFAULT_MODE mode"
 echo ""
 echo "Next: sudo arch2ram-create     (build the squashfs, ~5 min)"
 echo "Then: reboot → select a mode in GRUB"
+echo ""
+echo "Update cycle:  reboot to disk → sudo arch2ram-update → reboot back"
 echo ""
 echo "Note: if GRUB_TIMEOUT in /etc/default/grub is too short (<5s)"
 echo "you may not have time to select an entry — bump it before rebooting."

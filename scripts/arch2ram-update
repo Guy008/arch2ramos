@@ -1,0 +1,109 @@
+#!/bin/bash
+# arch2ram-update — refresh the RAM-mode squashfs after system updates.
+#
+# Run this from DISK MODE only (boot 'Arch Linux (disk' in GRUB).
+# It will:
+#   1. pacman -Syu       — update all packages on the real disk system
+#   2. mkinitcpio -p arch2ram — rebuild RAM-mode initramfs (in case kernel updated)
+#   3. arch2ram-create   — rebuild the squashfs from the now-updated disk
+#
+# After it finishes, reboot and pick one of the "Arch Linux from RAM" entries
+# to use the new image.
+#
+# Usage:
+#   sudo arch2ram-update                  (interactive, asks before pacman)
+#   sudo arch2ram-update -y | --yes       (no prompts, batch mode)
+#   sudo arch2ram-update --no-pacman      (skip pacman, just rebuild image)
+#   sudo arch2ram-update --no-create      (skip squashfs build, just update pkgs+initramfs)
+
+set -e
+
+NO_CONFIRM=0
+SKIP_PACMAN=0
+SKIP_CREATE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -y|--yes)        NO_CONFIRM=1 ;;
+        --no-pacman)     SKIP_PACMAN=1 ;;
+        --no-create)     SKIP_CREATE=1 ;;
+        -h|--help)
+            sed -n '2,18p' "$0" | sed 's|^# \?||'
+            exit 0
+            ;;
+        *) echo "Unknown flag: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run as root: sudo $0 $*" >&2
+    exit 1
+fi
+
+# Refuse to run from RAM mode — overlayfs root + tmpfs writes are pointless
+# (changes won't persist past reboot, and pacman might do dangerous things to
+# the live squashfs).
+if grep -q archisobasedir /proc/cmdline; then
+    cat >&2 <<EOF
+
+❌ ERROR: you are currently in RAM mode (archisobasedir on cmdline).
+
+In this mode, '/' is an overlayfs whose writes go to tmpfs and vanish on
+reboot. Running 'pacman -Syu' here would update nothing useful.
+
+Boot to disk mode first:
+  sudo /home/Guy008/Desktop/grub.sh "Arch Linux (disk"
+  sudo reboot
+
+Then re-run this script from the disk system.
+
+EOF
+    exit 1
+fi
+
+cd /  # mkinitcpio's pushd/popd dislikes weird CWDs
+
+echo "═══════════════════════════════════════════════════════════════"
+echo " arch2ram-update — disk-mode refresh cycle"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# ── 1. pacman -Syu ───────────────────────────────────────────────────────────
+if (( SKIP_PACMAN )); then
+    echo "[1/3] pacman -Syu — skipped (--no-pacman)"
+else
+    echo "[1/3] pacman -Syu — updating all packages"
+    if (( NO_CONFIRM )); then
+        pacman -Syu --noconfirm
+    else
+        pacman -Syu
+    fi
+fi
+echo ""
+
+# ── 2. mkinitcpio ────────────────────────────────────────────────────────────
+echo "[2/3] mkinitcpio -p arch2ram — rebuilding RAM-mode initramfs"
+mkinitcpio -p arch2ram
+echo ""
+
+# ── 3. arch2ram-create ───────────────────────────────────────────────────────
+if (( SKIP_CREATE )); then
+    echo "[3/3] arch2ram-create — skipped (--no-create)"
+else
+    echo "[3/3] arch2ram-create — building new squashfs (~3-5 min)"
+    # Find arch2ram-create — installed by arch2ram-install to /usr/local/bin or PATH,
+    # or fall back to project-tree relative.
+    if command -v arch2ram-create &>/dev/null; then
+        arch2ram-create
+    else
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        "$SCRIPT_DIR/arch2ram-create"
+    fi
+fi
+echo ""
+
+echo "═══════════════════════════════════════════════════════════════"
+echo " Update complete."
+echo ""
+echo " Next: reboot and pick a 'Arch Linux from RAM (...)' entry."
+echo "═══════════════════════════════════════════════════════════════"
