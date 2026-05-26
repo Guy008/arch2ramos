@@ -9,6 +9,12 @@
 #   archisobasedir=var/lib/arch2ram archisosearchuuid=<ROOT_UUID>
 #
 # Run this from your regular disk-based Arch install, after pacman -Syu.
+#
+# Optional: package stripping. If /etc/arch2ram/strip-packages.conf
+# exists, the STRIP_PACKAGES array in it lists packages whose files
+# will be excluded from the squashfs. The packages stay installed on
+# disk — only their files are skipped during build. The disk system
+# is unaffected.
 
 set -e
 
@@ -19,8 +25,9 @@ OUTPUT_TMP="${OUTPUT}.tmp"
 CHECKSUM="${OUT_DIR}/airootfs.sha512"
 COMP="zstd"     # fast decompression — what matters at boot
 BLOCK="1M"
+STRIP_CONF="/etc/arch2ram/strip-packages.conf"
 
-# Things to keep on disk / out of RAM
+# Things to keep on disk / out of RAM (path-based exclusions, always)
 EXCLUDES=(
     # Pseudo / runtime filesystems — must be excluded
     /proc
@@ -71,6 +78,72 @@ echo "Output:      $OUTPUT"
 echo "Compression: $COMP"
 echo ""
 
+# ── Optional: package-level stripping ─────────────────────────────────────────
+# If /etc/arch2ram/strip-packages.conf exists, source it and add the files of
+# every package in STRIP_PACKAGES to the exclude list. Disk system stays intact;
+# this only filters what mksquashfs writes into the .sfs.
+
+STRIP_PACKAGES=()
+strip_count_pkgs=0
+strip_count_files=0
+strip_count_bytes=0
+
+if [[ -r "$STRIP_CONF" ]]; then
+    echo "Reading $STRIP_CONF ..."
+    # shellcheck source=/dev/null
+    source "$STRIP_CONF"
+
+    if (( ${#STRIP_PACKAGES[@]} > 0 )); then
+        echo "Computing strip set (${#STRIP_PACKAGES[@]} packages requested)..."
+        TMPLIST="$(mktemp)"
+        trap 'rm -f "$TMPLIST"' EXIT
+
+        for pkg in "${STRIP_PACKAGES[@]}"; do
+            # Skip blank/comment lines that might survive splitting
+            [[ -z "$pkg" || "$pkg" =~ ^# ]] && continue
+            # Skip packages not installed
+            pacman -Q "$pkg" &>/dev/null || continue
+
+            pkg_files=0
+            pkg_bytes=0
+            while IFS= read -r path; do
+                # pacman -Qlq lists both files and directories. We only want
+                # FILES and SYMLINKS — never directories (excluding a dir
+                # would exclude everything inside it, including files from
+                # other packages).
+                if [[ -f "$path" || -L "$path" ]]; then
+                    EXCLUDES+=("$path")
+                    pkg_files=$((pkg_files + 1))
+                    # accumulate size (apparent size)
+                    sz=$(stat -c%s "$path" 2>/dev/null || echo 0)
+                    pkg_bytes=$((pkg_bytes + sz))
+                fi
+            done < <(pacman -Qlq "$pkg" 2>/dev/null)
+
+            if (( pkg_files > 0 )); then
+                strip_count_pkgs=$((strip_count_pkgs + 1))
+                strip_count_files=$((strip_count_files + pkg_files))
+                strip_count_bytes=$((strip_count_bytes + pkg_bytes))
+                printf "  %-32s %5d files  %s\n" \
+                    "$pkg" "$pkg_files" "$(numfmt --to=iec --suffix=B "$pkg_bytes")"
+            fi
+        done
+
+        echo ""
+        echo "Strip summary:"
+        printf "  %d packages, %d files, %s before compression\n" \
+            "$strip_count_pkgs" "$strip_count_files" \
+            "$(numfmt --to=iec --suffix=B "$strip_count_bytes")"
+        echo ""
+    else
+        echo "  (STRIP_PACKAGES is empty — skipping)"
+    fi
+else
+    echo "No $STRIP_CONF found — path-based excludes only."
+    echo "  (copy strip-packages.conf.example to enable package stripping)"
+    echo ""
+fi
+
 mkdir -p "$OUT_DIR"
 
 EXCL_ARGS=()
@@ -78,7 +151,7 @@ for dir in "${EXCLUDES[@]}"; do
     EXCL_ARGS+=(-e "$dir")
 done
 
-echo "Building squashfs (this takes 3-8 minutes)..."
+echo "Building squashfs (this takes 3-8 minutes; ${#EXCLUDES[@]} excludes)..."
 mksquashfs / "$OUTPUT_TMP" \
     -comp "$COMP" \
     -b "$BLOCK" \
@@ -98,4 +171,4 @@ echo "Done."
 echo "  $OUTPUT  ($(du -sh "$OUTPUT" | cut -f1))"
 echo "  $CHECKSUM"
 echo ""
-echo "Reboot and pick 'Arch Linux from RAM' in GRUB."
+echo "Reboot and pick a 'Arch Linux from RAM (...)' entry in GRUB."

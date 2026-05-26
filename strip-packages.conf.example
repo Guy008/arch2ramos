@@ -1,0 +1,148 @@
+# arch2ramos: packages whose files are excluded from the squashfs.
+#
+# This file is sourced into arch2ram-create. The named packages stay
+# fully installed on disk — only their files are skipped when building
+# the RAM image. Booting the disk system (or running pacman from disk)
+# is completely unaffected.
+#
+# Install: copy to /etc/arch2ram/strip-packages.conf and edit.
+#
+# Notes:
+#   * pacman -Qlq <pkg> is queried at build time — packages absent from
+#     the system are silently ignored
+#   * Dependency safety: arch2ram-create checks each entry with
+#     `pactree -ru` and refuses to strip anything still required by a
+#     package that's NOT also being stripped. Override with --force.
+#   * Comment-out anything you actually want in RAM mode
+
+STRIP_PACKAGES=(
+    # ── Display managers ─────────────────────────────────────────────
+    # We boot our compositors directly via systemd, no DM needed
+    gdm
+    sddm
+    lightdm
+
+    # ── Heavy desktop environments ───────────────────────────────────
+    # RAM modes use gamescope/cage/hyprland, none of these
+    plasma-meta
+    plasma-desktop
+    plasma-workspace
+    plasmashell
+    plasma-pa
+    plasma-nm
+    plasma-systemmonitor
+    plasma-firewall
+    plasma-thunderbolt
+    plasma-disks
+    plasma-browser-integration
+    kwin
+    kactivitymanagerd
+    kactivities-stats
+    powerdevil
+    breeze
+    breeze-gtk
+    bluedevil
+    discover
+    kinfocenter
+    ksystemstats
+    kdeplasma-addons
+    kde-cli-tools
+    kde-gtk-config
+    kdecoration
+    kscreen
+    kscreenlocker
+    kwallet-pam
+    kwayland-integration
+    kwrited
+    libkscreen
+    layer-shell-qt
+    milou
+    oxygen
+    oxygen-sounds
+    polkit-kde-agent
+    powerdevil
+    qqc2-breeze-style
+    sddm-kcm
+    spectacle
+    systemsettings
+    xdg-desktop-portal-kde
+    xsettingsd
+
+    gnome-shell
+    gnome-session
+    gnome-control-center
+    gnome-terminal
+    gnome-tweaks
+    gnome-keyring
+    mutter
+    gjs
+    nautilus
+    gnome-backgrounds
+    gnome-bluetooth-3.0
+    gnome-color-manager
+    gnome-contacts
+    gnome-disk-utility
+    gnome-system-monitor
+    gnome-themes-extra
+    gnome-user-share
+    xdg-desktop-portal-gnome
+
+    cinnamon
+    cinnamon-control-center
+    cinnamon-desktop
+    cinnamon-menus
+    cinnamon-screensaver
+    cinnamon-session
+    cinnamon-settings-daemon
+    cinnamon-translations
+    cinnamon-common
+    cinnamon-applets
+
+    # ── Package managers / build tools — RAM is read-only ────────────
+    # We can still query with pacman; we don't need yay/build chain.
+    yay
+    yay-bin
+    paru
+    paru-bin
+    pacman-contrib                      # paccache, etc.
+
+    base-devel
+    gcc                                 # gcc-libs stays (runtime)
+    clang                               # llvm stays (libs)
+    cmake
+    meson
+    ninja
+    make
+    autoconf
+    automake
+    libtool
+    patch
+    fakeroot
+    bison
+    flex
+    pkgconf
+    m4
+    which
+
+    # ── Kernel headers — DKMS rebuilds don't happen in RAM ───────────
+    linux-headers
+    linux-zen-headers
+    linux-lts-headers
+    linux-hardened-headers
+    dkms
+
+    # ── Development environments rarely needed at runtime ────────────
+    # (Comment out anything you DO use in RAM)
+    python-pip
+    python-pipx
+    nodejs-lts-hydrogen
+    npm                                 # bun/yarn stay if installed
+
+    # ── Documentation tools (most pkg docs already excluded by path) ─
+    info
+    texinfo
+    man-db                              # man pages excluded by path; this is the reader
+    man-pages
+    groff
+    less                                # commented? less is small but no man = no less use case
+)
