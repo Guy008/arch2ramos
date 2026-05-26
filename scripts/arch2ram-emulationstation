@@ -1,0 +1,58 @@
+#!/bin/bash
+# arch2ramos: gamescope + EmulationStation kiosk launcher.
+#
+# Boot flow: gamescope owns DRM, ES runs inside it. When the user picks
+# an entry in ES, the configured <command> runs (typically
+# /home/Guy008/Scripts/runer.sh %ROM%). The launched app appears as
+# the active window in gamescope; exiting it returns to ES.
+
+set -e
+
+# Wait for DRM devices (drm-fixup runs before us)
+for _ in 1 2 3 4 5; do
+    [[ -e /dev/dri/card0 ]] && break
+    sleep 0.5
+done
+
+# Wayland runtime dir
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+fi
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=gamescope
+
+# Hebrew/English keyboard
+export XKB_DEFAULT_LAYOUT=us,il
+export XKB_DEFAULT_OPTIONS=grp:alt_shift_toggle
+
+# Locale
+export LANG=he_IL.UTF-8
+export LC_CTYPE=he_IL.UTF-8
+
+# MangoHud globally
+export MANGOHUD=1
+
+# Output res — same overrides as gamescope mode
+WIDTH=3840
+HEIGHT=2160
+RATE=60
+if [[ -r /proc/cmdline ]]; then
+    res="$(grep -oE 'arch2ram\.es\.res=[0-9]+x[0-9]+' /proc/cmdline | tail -1 | cut -d= -f2)"
+    [[ -n "$res" ]] && { WIDTH="${res%x*}"; HEIGHT="${res#*x}"; }
+    rate="$(grep -oE 'arch2ram\.es\.rate=[0-9]+' /proc/cmdline | tail -1 | cut -d= -f2)"
+    [[ -n "$rate" ]] && RATE="$rate"
+fi
+
+echo "arch2ram-emulationstation: gamescope ${WIDTH}x${HEIGHT}@${RATE} -> emulationstation"
+
+# Drop ambient caps so bwrap (used by Steam runtime, glycin, Firefox) works.
+exec setpriv --ambient-caps '-all' \
+    gamescope \
+        -W "$WIDTH" -H "$HEIGHT" -r "$RATE" \
+        -f \
+        --force-grab-cursor \
+        --adaptive-sync \
+        -- \
+        emulationstation --no-splash
