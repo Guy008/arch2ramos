@@ -2,41 +2,117 @@
 # /etc/arch2ram/settings.conf overrides these (system-wide).
 # ~/.config/arch2ram/settings.conf overrides /etc (per-user).
 # Keys are namespaced with dots. Values are unquoted unless they need to be.
+#
+# IMPORTANT: do not place inline comments AFTER a value on the same line --
+# the parser treats trailing "# ..." as part of the value. Put comments
+# on their own lines instead.
 
-# --- Versioning ---
-version=0.3
+# ====== Versioning ======
+version=0.4
 release.name=arch2ramos
 release.codename=Smith
 
-# --- Boot defaults ---
+# ====== Boot defaults ======
 boot.default-mode=emulationstation
 boot.altfn-disabled=auto
 boot.copytoram=yes
 
-# --- Display ---
+# ====== Display ======
 video.resolution=auto
 video.refresh-rate=auto
 video.adaptive-sync=yes
 video.mangohud=yes
 
-# --- Audio ---
+# ====== Audio ======
 audio.master-volume=80
 audio.muted=no
 
-# --- Input ---
+# ====== Input ======
 input.keyboard.layouts=us,il
 input.keyboard.toggle=alt_shift_toggle
 input.mouse.hide-on-idle=no
 
-# --- Locale ---
+# ====== Locale ======
 locale.lang=he_IL.UTF-8
 locale.lc-ctype=he_IL.UTF-8
 locale.timezone=Asia/Jerusalem
 
-# --- Network ---
+# ====== Network ======
 network.wifi-auto=yes
 network.wol=yes
 
-# --- Splash / UX ---
+# ====== Splash / UX ======
 splash.screen.enabled=yes
 splash.theme=arch2ramos
+
+
+# ====== GAME WRAPPER (arch2ram-runer) ======
+# Every key here -> one menu entry in the future Game Settings UI.
+# Booleans accept: yes / on / 1 / true / enable / enabled. Anything else = no.
+
+# --- Backends ---
+# Values: auto | wayland | x11
+game.backend.policy=auto
+# Values: opengl | vulkan (toggles MangoHud DLSYM mode for OpenGL apps)
+game.rendering=opengl
+
+# --- MangoHud overlay ---
+game.mangohud=yes
+# Preset: empty | default | graphic-info | smarty | basic | more-info
+game.mangohud.preset=
+
+# --- GameMode ---
+game.gamemode=yes
+# Governor: performance | powersave | schedutil
+game.gamemode.governor=performance
+
+# --- nice / priority / affinity ---
+# Negative = higher priority (needs sudo for < -10)
+game.priority.nice=0
+# Format like "0-7" pins to cores 0..7. Empty = no pin.
+game.cpu.affinity=
+
+# --- AMD GPU ---
+game.amd.libva-driver=radeonsi
+game.amd.mesa-driver=radeonsi
+# Values: RADV | AMDVLK | amd_pro
+game.amd.vulkan-icd=RADV
+game.amd.dri-prime=yes
+# Values: aco | llvm | ngg | sam | gpl
+game.amd.radv.perftest=aco
+game.amd.radv.debug=nodcc
+
+# --- NVIDIA GPU ---
+game.nvidia.sync-vblank=yes
+game.nvidia.threaded-gl=yes
+game.nvidia.prime-render-offload=no
+
+# --- Intel GPU ---
+game.intel.libva-driver=iHD
+
+# --- Wine / Proton ---
+# Values: auto | proton-ge | vanilla | stable
+game.wine.runtime=auto
+game.wine.esync=yes
+game.wine.fsync=yes
+game.wine.fsr=no
+# 0-5 (5=sharpest)
+game.wine.fsr.strength=2
+# Example: "mscoree=n; mshtml=d"
+game.wine.dll-overrides=
+# Custom WINEPREFIX path; empty = wine default
+game.wine.prefix=
+
+# --- DXVK / VKD3D ---
+# Values: off | fps | "fps,gpuload,memory" | full
+game.dxvk.hud=off
+game.dxvk.async=no
+game.vkd3d.fsr=no
+
+# --- Steam ---
+# "1" = prefer host libs; empty = Steam decides
+game.steam.runtime=
+
+# --- Logging ---
+# yes = capture stdout+stderr to ~/.cache/arch2ram-runer/
+game.log=no

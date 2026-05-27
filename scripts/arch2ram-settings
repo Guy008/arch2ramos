@@ -44,8 +44,11 @@ read_key_from() {
                 # join everything after first = (in case value contains =)
                 val=$2
                 for (i=3; i<=NF; i++) val = val "=" $i
+                # Strip inline comments: " #..." or tab+#
+                sub(/[[:space:]]+#.*$/, "", val)
+                # Trim whitespace
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
-                # strip surrounding quotes
+                # Strip surrounding quotes
                 if (substr(val,1,1)=="\"" && substr(val,length(val),1)=="\"") {
                     val=substr(val,2,length(val)-2)
                 }

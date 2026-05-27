@@ -66,6 +66,14 @@ SETTINGS_DEFAULTS_SRC="${PROJECT_DIR}/etc-arch2ram/settings.defaults"
 BTAUTO_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-bluetooth-autoconnect"
 BTAUTO_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-bluetooth-autoconnect.service"
 
+# Catalog system: arch2ram-catalog + seed
+CATALOG_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-catalog"
+CATALOG_SEED_SRC="${PROJECT_DIR}/scripts/arch2ram-catalog-seed"
+
+# Lutris-style runer + game settings UI
+RUNER_SRC="${PROJECT_DIR}/scripts/arch2ram-runer"
+GAMESETTINGS_SRC="${PROJECT_DIR}/scripts/arch2ram-game-settings"
+
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -117,6 +125,12 @@ SETTINGS_DEFAULTS_DST="/etc/arch2ram/settings.defaults"
 # Bluetooth destinations
 BTAUTO_SCRIPT_DST="/usr/local/bin/arch2ram-bluetooth-autoconnect"
 BTAUTO_UNIT_DST="/etc/systemd/system/arch2ram-bluetooth-autoconnect.service"
+
+# Catalog destinations
+CATALOG_SCRIPT_DST="/usr/local/bin/arch2ram-catalog"
+CATALOG_SEED_DST="/usr/local/bin/arch2ram-catalog-seed"
+RUNER_DST="/usr/local/bin/arch2ram-runer"
+GAMESETTINGS_DST="/usr/local/bin/arch2ram-game-settings"
 
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
@@ -319,6 +333,21 @@ install -Dm644 "$BTAUTO_UNIT_SRC"   "$BTAUTO_UNIT_DST"
 systemctl enable arch2ram-bluetooth-autoconnect.service >/dev/null 2>&1 || true
 systemctl enable bluetooth.service >/dev/null 2>&1 || true
 echo "      bluetooth: arch2ram-bluetooth-autoconnect (trusted devices on boot)"
+
+# Catalog: one-click yay/pacman installer accessible from ES.
+install -Dm755 "$CATALOG_SCRIPT_SRC" "$CATALOG_SCRIPT_DST"
+install -Dm755 "$CATALOG_SEED_SRC"   "$CATALOG_SEED_DST"
+# Seed the catalog folders in the user's home (idempotent).
+user="${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}"
+if [[ -n "$user" ]]; then
+    sudo -u "$user" "$CATALOG_SEED_DST" >/dev/null 2>&1 || true
+fi
+echo "      catalog: arch2ram-catalog + seed (77 curated apps in 10 categories)"
+
+# Lutris-style runer + game settings UI (Sprint 5)
+install -Dm755 "$RUNER_SRC"        "$RUNER_DST"
+install -Dm755 "$GAMESETTINGS_SRC" "$GAMESETTINGS_DST"
+echo "      game-wrapper: arch2ram-runer + arch2ram-game-settings (yad UI)"
 
 # Kiosk (cage)
 if (( WANT_KIOSK )); then

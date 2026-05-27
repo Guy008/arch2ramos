@@ -1,0 +1,233 @@
+#!/bin/bash
+# arch2ram-runer -- Lutris-style game wrapper, every knob read from
+# arch2ram-settings.
+#
+# Replaces the role of /home/Guy008/Scripts/runer.sh in the arch2ramos
+# pipeline (kept as-is for direct invocation). Designed so that every
+# setting controlled here corresponds to ONE key in arch2ram-settings,
+# and therefore ONE menu entry in the future Game Settings GUI.
+#
+# Usage:  arch2ram-runer [--profile=<name>] <app> [args...]
+#
+# Profile mechanism (planned): --profile=<name> reads from
+# /home/Guy008/.config/arch2ram/profiles/<name>.conf and applies its
+# overrides on top of the global settings. For now, only global keys.
+
+set -u
+
+# ── Resolve the settings tool ─────────────────────────────────────────────
+SETTINGS_TOOL="/usr/local/bin/arch2ram-settings"
+if [[ ! -x "$SETTINGS_TOOL" ]]; then
+    # Fallback to PATH lookup
+    SETTINGS_TOOL=$(command -v arch2ram-settings 2>/dev/null || true)
+fi
+
+get() {
+    local key="$1"
+    local default="${2:-}"
+    if [[ -n "$SETTINGS_TOOL" && -x "$SETTINGS_TOOL" ]]; then
+        "$SETTINGS_TOOL" get "$key" "$default" 2>/dev/null
+    else
+        echo "$default"
+    fi
+}
+
+is_yes() {
+    # Treat yes/on/1/true as "yes". Anything else (including missing) -> no.
+    local v="$1"
+    case "${v,,}" in yes|on|1|true|enable|enabled) return 0 ;; *) return 1 ;; esac
+}
+
+# ── Detect environment ────────────────────────────────────────────────────
+
+# Wayland vs X11
+ENV_TYPE="X11"
+[[ "${XDG_SESSION_TYPE:-}" == "wayland" ]] && ENV_TYPE="WAYLAND"
+
+# GPU vendor (cached from arch2ram-pick-primary-gpu if available)
+GPU_VENDOR="unknown"
+if [[ -r /etc/arch2ram/gpu.env ]]; then
+    # shellcheck disable=SC1091
+    source /etc/arch2ram/gpu.env
+    GPU_VENDOR="${ARCH2RAM_GPU_VENDOR:-unknown}"
+fi
+# Fallback: lspci sniff
+if [[ "$GPU_VENDOR" == "unknown" ]]; then
+    if lspci | grep -qi NVIDIA; then GPU_VENDOR="nvidia"
+    elif lspci | grep -qiE 'AMD|Advanced Micro|ATI'; then GPU_VENDOR="amd"
+    elif lspci | grep -qi Intel; then GPU_VENDOR="intel"
+    fi
+fi
+
+# ── Backends (Qt/GDK/SDL/Clutter): Wayland vs X11 force ───────────────────
+
+case "$(get game.backend.policy auto)" in
+    wayland)
+        export GDK_BACKEND=wayland
+        export QT_QPA_PLATFORM=wayland
+        export CLUTTER_BACKEND=wayland
+        export SDL_VIDEODRIVER=wayland
+        ;;
+    x11)
+        export GDK_BACKEND=x11
+        export QT_QPA_PLATFORM=x11
+        export CLUTTER_BACKEND=x11
+        export SDL_VIDEODRIVER=x11
+        ;;
+    auto|*)
+        if [[ "$ENV_TYPE" == "WAYLAND" ]]; then
+            export GDK_BACKEND=wayland
+            export QT_QPA_PLATFORM=wayland
+            export CLUTTER_BACKEND=wayland
+            export SDL_VIDEODRIVER=wayland
+        else
+            export GDK_BACKEND=x11
+            export QT_QPA_PLATFORM=x11
+            export CLUTTER_BACKEND=x11
+            export SDL_VIDEODRIVER=x11
+        fi
+        ;;
+esac
+
+# ── GPU-specific tuning ───────────────────────────────────────────────────
+
+case "$GPU_VENDOR" in
+    amd)
+        export LIBVA_DRIVER_NAME="$(get game.amd.libva-driver radeonsi)"
+        export MESA_LOADER_DRIVER_OVERRIDE="$(get game.amd.mesa-driver radeonsi)"
+        export AMD_VULKAN_ICD="$(get game.amd.vulkan-icd RADV)"
+        if is_yes "$(get game.amd.dri-prime yes)"; then
+            export DRI_PRIME=1
+        fi
+        radv_perftest="$(get game.amd.radv.perftest aco)"
+        [[ -n "$radv_perftest" ]] && export RADV_PERFTEST="$radv_perftest"
+        radv_debug="$(get game.amd.radv.debug nodcc)"
+        [[ -n "$radv_debug" ]] && export RADV_DEBUG="$radv_debug"
+        ;;
+    nvidia)
+        is_yes "$(get game.nvidia.sync-vblank yes)" && export __GL_SYNC_TO_VBLANK=1
+        is_yes "$(get game.nvidia.threaded-gl yes)" && export __GL_THREADED_OPTIMIZATIONS=1
+        prime_render="$(get game.nvidia.prime-render-offload no)"
+        if is_yes "$prime_render"; then
+            export __NV_PRIME_RENDER_OFFLOAD=1
+            export __GLX_VENDOR_LIBRARY_NAME=nvidia
+        fi
+        ;;
+    intel)
+        # Reasonable defaults; Intel rarely needs much
+        export LIBVA_DRIVER_NAME="$(get game.intel.libva-driver iHD)"
+        ;;
+esac
+
+# ── Wine / Proton tuning ──────────────────────────────────────────────────
+
+wine_runtime="$(get game.wine.runtime auto)"
+case "$wine_runtime" in
+    proton-ge|ge-proton)
+        # Hint for tools that respect WINE_RUNTIME (Lutris, Bottles, etc.)
+        export WINE_RUNTIME=ge-proton
+        ;;
+    vanilla|stable)
+        export WINE_RUNTIME=stable
+        ;;
+esac
+
+is_yes "$(get game.wine.esync yes)" && export WINEESYNC=1
+is_yes "$(get game.wine.fsync yes)" && export WINEFSYNC=1
+is_yes "$(get game.wine.fsr no)"   && export WINE_FULLSCREEN_FSR=1
+fsr_strength="$(get game.wine.fsr.strength 2)"
+[[ -n "$fsr_strength" ]] && export WINE_FULLSCREEN_FSR_STRENGTH="$fsr_strength"
+
+dll_overrides="$(get game.wine.dll-overrides '')"
+[[ -n "$dll_overrides" ]] && export WINEDLLOVERRIDES="$dll_overrides"
+
+wine_prefix="$(get game.wine.prefix '')"
+[[ -n "$wine_prefix" ]] && export WINEPREFIX="$wine_prefix"
+
+# ── DXVK / VKD3D ──────────────────────────────────────────────────────────
+
+dxvk_hud="$(get game.dxvk.hud off)"
+[[ "$dxvk_hud" != "off" && "$dxvk_hud" != "" ]] && export DXVK_HUD="$dxvk_hud"
+
+is_yes "$(get game.dxvk.async no)" && export DXVK_ASYNC=1
+is_yes "$(get game.vkd3d.fsr no)"  && export VKD3D_CONFIG="dxr11,dxr"
+
+# ── MangoHud overlay ──────────────────────────────────────────────────────
+
+MANGOHUD_CMD=""
+if is_yes "$(get game.mangohud yes)" && command -v mangohud >/dev/null 2>&1; then
+    # OpenGL apps need MANGOHUD_DLSYM=1 instead of LD_PRELOAD wrapping.
+    if [[ "$(get game.rendering opengl)" == "opengl" ]]; then
+        export MANGOHUD_DLSYM=1
+        MANGOHUD_CMD="mangohud --dlsym"
+    else
+        export MANGOHUD=1
+        MANGOHUD_CMD="mangohud"
+    fi
+    mangohud_preset="$(get game.mangohud.preset '')"
+    [[ -n "$mangohud_preset" ]] && export MANGOHUD_CONFIG="preset=$mangohud_preset"
+fi
+
+# ── GameMode ──────────────────────────────────────────────────────────────
+
+GAMEMODE_CMD=""
+if is_yes "$(get game.gamemode yes)" && command -v gamemoderun >/dev/null 2>&1; then
+    export LD_PRELOAD="${LD_PRELOAD:-}:/usr/lib/libgamemodeauto.so.0"
+    GAMEMODE_CMD="gamemoderun"
+    gm_governor="$(get game.gamemode.governor performance)"
+    [[ -n "$gm_governor" ]] && export GAMEMODE_GOVERNOR="$gm_governor"
+fi
+
+# ── nice / ionice priority ────────────────────────────────────────────────
+
+NICE_CMD=""
+nice_value="$(get game.priority.nice 0)"
+if [[ -n "$nice_value" && "$nice_value" != "0" ]]; then
+    NICE_CMD="nice -n $nice_value"
+fi
+
+# ── CPU affinity (taskset) ────────────────────────────────────────────────
+
+TASKSET_CMD=""
+cpu_affinity="$(get game.cpu.affinity '')"
+if [[ -n "$cpu_affinity" && "$cpu_affinity" != "all" ]]; then
+    TASKSET_CMD="taskset -c $cpu_affinity"
+fi
+
+# ── Output logging ────────────────────────────────────────────────────────
+
+LOG_TO=""
+if is_yes "$(get game.log yes)"; then
+    LOG_DIR="${HOME:-/home/Guy008}/.cache/arch2ram-runer"
+    mkdir -p "$LOG_DIR"
+    LOG_TO="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_${1##*/}.log"
+fi
+
+# ── Steam runtime ─────────────────────────────────────────────────────────
+
+steam_runtime="$(get game.steam.runtime '')"
+[[ -n "$steam_runtime" ]] && export STEAM_RUNTIME_PREFER_HOST_LIBRARIES="$steam_runtime"
+
+# ── Launch ────────────────────────────────────────────────────────────────
+
+if [[ $# -eq 0 ]]; then
+    echo "usage: arch2ram-runer <app> [args...]" >&2
+    exit 64
+fi
+
+APP="$1"; shift
+
+cmd=()
+[[ -n "$TASKSET_CMD"  ]] && cmd+=($TASKSET_CMD)
+[[ -n "$NICE_CMD"     ]] && cmd+=($NICE_CMD)
+[[ -n "$GAMEMODE_CMD" ]] && cmd+=($GAMEMODE_CMD)
+[[ -n "$MANGOHUD_CMD" ]] && cmd+=($MANGOHUD_CMD)
+cmd+=("$APP" "$@")
+
+echo "arch2ram-runer: gpu=$GPU_VENDOR env=$ENV_TYPE  cmd=${cmd[*]}"
+
+if [[ -n "$LOG_TO" ]]; then
+    "${cmd[@]}" 2>&1 | tee "$LOG_TO"
+else
+    "${cmd[@]}"
+fi

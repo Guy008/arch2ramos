@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""arch2ram-catalog-seed -- generate ~/ES/catalog/<Category>/<Name>.sh entries
+from a structured curated list. Each .sh calls arch2ram-catalog install
+with the right package name, optionally specifying the binary to launch.
+
+Re-runnable: existing files are overwritten (so updating the seed updates
+the catalog).
+"""
+import os
+import stat
+from pathlib import Path
+
+HOME = Path(os.path.expanduser("~"))
+CATALOG = HOME / "ES" / "catalog"
+
+# Each entry: (display_name, package_name, binary_to_launch, description)
+# binary defaults to package name if omitted.
+CATALOG_DATA = {
+    "Browsers": [
+        ("Brave", "brave-bin", "brave", "Privacy-focused Chromium fork (AUR)"),
+        ("Chrome", "google-chrome", "google-chrome-stable", "Google Chrome (AUR)"),
+        ("Chromium", "chromium", "chromium", "Open-source Chromium"),
+        ("Firefox", "firefox", "firefox", "Mozilla Firefox"),
+        ("Librewolf", "librewolf-bin", "librewolf", "Hardened Firefox (AUR)"),
+        ("Vivaldi", "vivaldi", "vivaldi-stable", "Power-user browser (AUR)"),
+        ("Tor Browser", "tor-browser-bin", "tor-browser", "Anonymous browsing (AUR)"),
+    ],
+    "Streaming": [
+        ("Spotify", "spotify", "spotify", "Music streaming (AUR)"),
+        ("OBS Studio", "obs-studio", "obs", "Stream/record video"),
+        ("Twitch CLI", "twitch-cli", "twitch", "Twitch.tv command-line (AUR)"),
+        ("Streamlink", "streamlink", "streamlink", "Pipe live streams to mpv"),
+        ("Plex Media Server", "plex-media-server", "plexmediaserver", "Self-hosted media server (AUR)"),
+        ("Jellyfin Media Player", "jellyfin-media-player-bin", "jellyfinmediaplayer", "Jellyfin client (AUR)"),
+    ],
+    "Gaming": [
+        ("Steam", "steam", "steam", "Valve Steam client"),
+        ("Lutris", "lutris", "lutris", "Game manager (Wine/Proton/native)"),
+        ("Heroic Launcher", "heroic-games-launcher-bin", "heroic", "Epic/GOG/Amazon games (AUR)"),
+        ("Bottles", "bottles", "bottles", "Wine prefix manager (Flatpak-style UI)"),
+        ("MangoHud", "mangohud", "mangohud", "Vulkan/OpenGL HUD overlay"),
+        ("GOverlay", "goverlay", "goverlay", "MangoHud GUI config (AUR)"),
+        ("ProtonUp-Qt", "protonup-qt", "protonup-qt", "Manage Proton-GE versions (AUR)"),
+        ("Cemu", "cemu", "cemu", "Wii U emulator (AUR)"),
+        ("RPCS3", "rpcs3-bin", "rpcs3", "PS3 emulator (AUR)"),
+        ("Yuzu (Ryujinx fork)", "ryujinx-bin", "Ryujinx", "Switch emulator (AUR)"),
+    ],
+    "Productivity": [
+        ("LibreOffice", "libreoffice-fresh", "libreoffice", "Full office suite"),
+        ("OnlyOffice", "onlyoffice-bin", "onlyoffice-desktopeditors", "MS Office-compatible (AUR)"),
+        ("Obsidian", "obsidian", "obsidian", "Note-taking + linking"),
+        ("Logseq", "logseq-desktop", "logseq-desktop", "Outliner + PKM (AUR)"),
+        ("Joplin", "joplin-desktop", "joplin-desktop", "Markdown notes (AUR)"),
+        ("Thunderbird", "thunderbird", "thunderbird", "Email client"),
+        ("Anki", "anki", "anki", "Spaced-repetition flashcards"),
+        ("KeePassXC", "keepassxc", "keepassxc", "Password manager"),
+    ],
+    "Development": [
+        ("VS Code", "visual-studio-code-bin", "code", "Microsoft VS Code (AUR)"),
+        ("VSCodium", "vscodium-bin", "codium", "VS Code without telemetry (AUR)"),
+        ("Sublime Text", "sublime-text-4", "subl", "Lightweight editor (AUR)"),
+        ("Zed Editor", "zed", "zed", "Fast collaborative editor (AUR)"),
+        ("Neovim", "neovim", "nvim", "Modern Vim"),
+        ("Helix", "helix", "hx", "Post-modern modal editor"),
+        ("GitHub CLI", "github-cli", "gh", "Manage GitHub from terminal"),
+        ("Docker", "docker", "docker", "Container runtime"),
+        ("Podman", "podman", "podman", "Rootless container runtime"),
+    ],
+    "Media": [
+        ("VLC", "vlc", "vlc", "Plays any media file"),
+        ("mpv", "mpv", "mpv", "Minimalist video player"),
+        ("Audacity", "audacity", "audacity", "Audio editor"),
+        ("Blender", "blender", "blender", "3D modeling + render"),
+        ("GIMP", "gimp", "gimp", "Photoshop alternative"),
+        ("Krita", "krita", "krita", "Digital painting"),
+        ("Inkscape", "inkscape", "inkscape", "Vector graphics"),
+        ("DaVinci Resolve", "davinci-resolve", "davinci-resolve", "Pro video editor (AUR, heavy)"),
+        ("OBS Studio", "obs-studio", "obs", "Stream + record"),
+        ("Kdenlive", "kdenlive", "kdenlive", "Non-linear video editor"),
+        ("HandBrake", "handbrake", "ghb", "Video transcoder"),
+    ],
+    "Communication": [
+        ("Discord", "discord", "discord", "Voice/text chat for gaming"),
+        ("Telegram", "telegram-desktop", "telegram-desktop", "Telegram client"),
+        ("WhatsApp (Web)", "whatsapp-for-linux", "whatsapp-for-linux", "WhatsApp wrapper (AUR)"),
+        ("Signal", "signal-desktop", "signal-desktop", "End-to-end encrypted messages"),
+        ("Slack", "slack-desktop", "slack", "Workplace chat (AUR)"),
+        ("Zoom", "zoom", "zoom", "Video conferencing (AUR)"),
+        ("Element (Matrix)", "element-desktop", "element-desktop", "Matrix.org client"),
+    ],
+    "System": [
+        ("Timeshift", "timeshift", "timeshift", "System snapshot/restore"),
+        ("Stacer", "stacer", "stacer", "System monitor + optimizer (AUR)"),
+        ("Bleachbit", "bleachbit", "bleachbit", "System cleaner"),
+        ("Htop", "htop", "htop", "Process viewer"),
+        ("Btop", "btop", "btop", "Resource monitor (modern)"),
+        ("GParted", "gparted", "gparted", "Partition editor"),
+        ("Filelight", "filelight", "filelight", "Visualize disk usage"),
+        ("Czkawka", "czkawka", "czkawka_gui", "Find duplicate files (AUR)"),
+    ],
+    "Files": [
+        ("Nemo (Cinnamon FM)", "nemo", "nemo", "GTK file manager"),
+        ("Dolphin (KDE FM)", "dolphin", "dolphin", "KDE file manager"),
+        ("Thunar", "thunar", "thunar", "Lightweight Xfce file manager"),
+        ("Ranger", "ranger", "ranger", "TUI vim-like file manager"),
+        ("nnn", "nnn", "nnn", "Fastest TUI file manager"),
+        ("FileZilla", "filezilla", "filezilla", "FTP/SFTP client"),
+    ],
+    "Network": [
+        ("Wireshark", "wireshark-qt", "wireshark", "Network protocol analyzer"),
+        ("Nmap", "nmap", "nmap", "Network discovery + security audit"),
+        ("Mullvad VPN", "mullvad-vpn", "mullvad", "VPN client (AUR)"),
+        ("WireGuard", "wireguard-tools", "wg-quick", "Modern fast VPN"),
+        ("Syncthing", "syncthing", "syncthing", "Decentralized file sync"),
+    ],
+}
+
+ENTRY_TEMPLATE = """#!/bin/bash
+# arch2ramos catalog entry
+# Generated by arch2ram-catalog-seed -- edit the seed script instead.
+#
+# name: {name}
+# pkg:  {pkg}
+# desc: {desc}
+exec arch2ram-catalog launch-if-installed "{pkg}" "{binary}"
+"""
+
+def main():
+    CATALOG.mkdir(parents=True, exist_ok=True)
+
+    # Top-level README
+    readme = CATALOG / "_README.txt"
+    readme.write_text(
+        "arch2ramos catalog -- curated software\n"
+        "\n"
+        "Click any category folder, then any app to install or launch it.\n"
+        "Already-installed apps launch directly. Otherwise, a konsole\n"
+        "window opens with yay/pacman and asks for confirmation.\n"
+        "\n"
+        "To uninstall:\n"
+        "  /usr/local/bin/arch2ram-catalog uninstall <pkg>\n"
+    )
+
+    total = 0
+    for category, entries in CATALOG_DATA.items():
+        catdir = CATALOG / category
+        catdir.mkdir(exist_ok=True)
+        for name, pkg, binary, desc in entries:
+            safe_name = name.replace("/", "_").replace(" ", "_")
+            entry_file = catdir / f"{safe_name}.sh"
+            entry_file.write_text(ENTRY_TEMPLATE.format(
+                name=name, pkg=pkg, binary=binary, desc=desc
+            ))
+            entry_file.chmod(entry_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            total += 1
+
+    print(f"Wrote {total} catalog entries in {len(CATALOG_DATA)} categories under {CATALOG}/")
+    for category in sorted(CATALOG_DATA):
+        print(f"  {category:18s} ({len(CATALOG_DATA[category])} entries)")
+
+if __name__ == "__main__":
+    main()

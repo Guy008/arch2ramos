@@ -1,0 +1,177 @@
+#!/bin/bash
+# arch2ram-catalog -- one-click install/uninstall for curated software.
+#
+# Replaces BUA's AppImage juggling with native pacman/yay. Each catalog
+# entry is a .sh in ~/ES/catalog/<Category>/<Name>.sh containing one line:
+#     exec arch2ram-catalog install "<package-name>" "[binary-to-launch]"
+# The wrapper looks up the package, opens a konsole, runs yay -S, shows
+# progress, then re-runs the ES discovery script so the new app appears
+# in the Apps category for next launch.
+#
+# Subcommands:
+#   install <pkg> [binary]   Install via yay/pacman; relaunch ES after.
+#   uninstall <pkg>          Remove via pacman -R.
+#   status <pkg>             "installed" or "not-installed" + exit 0/1.
+#   launch-if-installed <pkg> <binary>
+#                            If pkg installed, run binary; else install
+#                            (used by catalog .sh entries for hybrid
+#                            behavior).
+#
+# Sources:
+#   1. official repos (pacman -Ss / pacman -Q)
+#   2. AUR via yay
+#   3. flatpak (planned)
+#   4. AppImage URL (planned, for proprietary that AUR can't ship)
+
+set -u
+
+PROGRAM_NAME="$(basename "$0")"
+LOG=/var/log/arch2ram-catalog.log
+
+# Best-effort logging (works as user, root, or via sudo)
+log() {
+    local msg="[$(date '+%H:%M:%S')] $*"
+    echo "$msg"
+    { echo "$msg" >> "$LOG"; } 2>/dev/null || true
+}
+
+# Check if a package is installed (either pacman or AUR, both go through pacman -Q)
+is_installed() {
+    pacman -Qq "$1" >/dev/null 2>&1
+}
+
+# Run a long-running command in a konsole window so the user can watch progress.
+# Falls back to xterm/foot if konsole missing.
+in_konsole() {
+    local title="$1"; shift
+    local cmd="$*"
+    local term=""
+    for t in konsole xterm alacritty kitty foot; do
+        if command -v "$t" >/dev/null 2>&1; then term="$t"; break; fi
+    done
+    if [[ -z "$term" ]]; then
+        log "no terminal -- running inline"
+        eval "$cmd"
+        return $?
+    fi
+    case "$term" in
+        konsole)  exec konsole --hold --separate --title "$title" -e bash -c "$cmd" ;;
+        xterm)    exec xterm -title "$title" -e bash -c "$cmd; echo '[press enter]'; read" ;;
+        *)        exec "$term" -e bash -c "$cmd; echo '[press enter]'; read" ;;
+    esac
+}
+
+do_install() {
+    local pkg="$1"
+    local binary="${2:-}"
+
+    if is_installed "$pkg"; then
+        log "already installed: $pkg"
+        notify-send "arch2ramos catalog" "Already installed: $pkg.  Find it in Apps." 2>/dev/null || true
+        if [[ -n "$binary" ]] && command -v "$binary" >/dev/null 2>&1; then
+            log "launching $binary instead"
+            exec /home/Guy008/Scripts/runer.sh "$binary"
+        fi
+        return 0
+    fi
+
+    log "installing: $pkg"
+
+    # Decide installer based on whether pkg is in official repos or AUR.
+    local installer
+    if pacman -Si "$pkg" >/dev/null 2>&1; then
+        installer="sudo pacman -S --needed --noconfirm $pkg"
+    elif command -v yay >/dev/null 2>&1; then
+        installer="yay -S --needed --noconfirm --answerdiff=None --answerclean=None --removemake $pkg"
+    else
+        notify-send "arch2ramos catalog" "Package $pkg requires AUR (yay not installed)" 2>/dev/null || true
+        log "yay missing and $pkg not in official repos"
+        return 1
+    fi
+
+    # Open a konsole window where the user sees the install live.
+    # On success, refresh ~/ES/apps so the new app appears.
+    in_konsole "Install $pkg" "
+        echo '═══ arch2ramos catalog ═══'
+        echo 'Installing: $pkg'
+        echo
+        $installer
+        rc=\$?
+        echo
+        if [ \$rc -eq 0 ]; then
+            echo '✓ install successful -- refreshing ES Apps category...'
+            [ -x /usr/local/bin/arch2ram-es-discover ] && /usr/local/bin/arch2ram-es-discover
+            echo
+            echo 'Done. Press enter to close this window. Find $pkg in the Apps category in ES.'
+        else
+            echo \"✗ install failed (exit \$rc). See output above.\"
+            echo
+            echo 'Press enter to close.'
+        fi
+        read
+    "
+}
+
+do_uninstall() {
+    local pkg="$1"
+    if ! is_installed "$pkg"; then
+        log "not installed: $pkg"
+        return 0
+    fi
+    log "removing: $pkg"
+    in_konsole "Remove $pkg" "
+        echo '═══ arch2ramos catalog ═══'
+        echo 'Removing: $pkg'
+        echo
+        sudo pacman -R --noconfirm $pkg
+        rc=\$?
+        echo
+        if [ \$rc -eq 0 ]; then
+            echo '✓ removed.'
+            [ -x /usr/local/bin/arch2ram-es-discover ] && /usr/local/bin/arch2ram-es-discover
+        else
+            echo \"✗ remove failed (exit \$rc).\"
+        fi
+        echo 'Press enter to close.'
+        read
+    "
+}
+
+do_status() {
+    local pkg="$1"
+    if is_installed "$pkg"; then
+        echo "installed"
+        return 0
+    else
+        echo "not-installed"
+        return 1
+    fi
+}
+
+do_launch_if_installed() {
+    local pkg="$1"
+    local binary="${2:-$pkg}"
+    if is_installed "$pkg"; then
+        log "launching $binary"
+        exec /home/Guy008/Scripts/runer.sh "$binary"
+    else
+        do_install "$pkg" "$binary"
+    fi
+}
+
+case "${1:-}" in
+    install)               shift; do_install "$@" ;;
+    uninstall|remove)      shift; do_uninstall "$@" ;;
+    status)                shift; do_status "$@" ;;
+    launch|launch-if-installed) shift; do_launch_if_installed "$@" ;;
+    *)
+        cat <<EOF >&2
+usage: arch2ram-catalog <command> <args>
+  install <pkg> [binary]            install via pacman or yay; runs binary if already installed
+  uninstall <pkg>                   remove via pacman
+  status <pkg>                      print "installed" or "not-installed"
+  launch-if-installed <pkg> [bin]   launch if installed, else install
+EOF
+        exit 64
+        ;;
+esac

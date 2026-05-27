@@ -75,6 +75,12 @@ rm -vf /etc/arch2ram/gpu.env
 rm -vf /etc/X11/xorg.conf.d/10-arch2ram-prime.conf
 # Bluetooth helpers
 rm -vf /usr/local/bin/arch2ram-bluetooth-autoconnect
+# Catalog helpers (leave seeded files in ~/ES/catalog/ -- user data)
+rm -vf /usr/local/bin/arch2ram-catalog
+rm -vf /usr/local/bin/arch2ram-catalog-seed
+# Lutris-style runer + game settings UI
+rm -vf /usr/local/bin/arch2ram-runer
+rm -vf /usr/local/bin/arch2ram-game-settings
 rm -vf /etc/systemd/user-environment-generators/10-arch2ram-drm
 rm -vf /usr/share/konsole/arch2ram-kiosk.profile
 

@@ -1,0 +1,172 @@
+#!/bin/bash
+# arch2ram-game-settings -- yad-based GUI to edit game-wrapper knobs.
+# Each form field corresponds to ONE arch2ram-settings key. On save,
+# values are written back via `arch2ram-settings set`. arch2ram-runer
+# picks them up on the next game launch.
+#
+# Intent: this is the placeholder Lutris-style menu UNTIL we patch
+# Batocera ES with a native menu UI for the same keys. The backend
+# (settings keys) stays identical -- only the frontend changes.
+
+set -u
+
+if ! command -v yad >/dev/null 2>&1; then
+    konsole --hold -e bash -c "echo 'yad is not installed. Run: sudo pacman -S yad'; read"
+    exit 1
+fi
+
+S="/usr/local/bin/arch2ram-settings"
+
+# Helper: convert yes/no to TRUE/FALSE for yad checkboxes
+bool_to_yad() { [[ "$1" == "yes" || "$1" == "1" || "$1" == "true" ]] && echo TRUE || echo FALSE; }
+yad_to_bool() { [[ "$1" == "TRUE" ]] && echo yes || echo no; }
+
+# Read current values
+v_mangohud=$(bool_to_yad "$($S get game.mangohud yes)")
+v_mangohud_preset=$($S get game.mangohud.preset "")
+v_gamemode=$(bool_to_yad "$($S get game.gamemode yes)")
+v_gm_governor=$($S get game.gamemode.governor performance)
+v_nice=$($S get game.priority.nice 0)
+v_affinity=$($S get game.cpu.affinity "")
+
+v_backend=$($S get game.backend.policy auto)
+v_rendering=$($S get game.rendering opengl)
+
+v_amd_icd=$($S get game.amd.vulkan-icd RADV)
+v_amd_dri=$(bool_to_yad "$($S get game.amd.dri-prime yes)")
+v_amd_perftest=$($S get game.amd.radv.perftest aco)
+v_amd_debug=$($S get game.amd.radv.debug nodcc)
+
+v_nv_vblank=$(bool_to_yad "$($S get game.nvidia.sync-vblank yes)")
+v_nv_thread=$(bool_to_yad "$($S get game.nvidia.threaded-gl yes)")
+v_nv_offload=$(bool_to_yad "$($S get game.nvidia.prime-render-offload no)")
+
+v_wine_runtime=$($S get game.wine.runtime auto)
+v_wine_esync=$(bool_to_yad "$($S get game.wine.esync yes)")
+v_wine_fsync=$(bool_to_yad "$($S get game.wine.fsync yes)")
+v_wine_fsr=$(bool_to_yad "$($S get game.wine.fsr no)")
+v_wine_fsr_strength=$($S get game.wine.fsr.strength 2)
+v_wine_dll=$($S get game.wine.dll-overrides "")
+v_wine_prefix=$($S get game.wine.prefix "")
+
+v_dxvk_hud=$($S get game.dxvk.hud off)
+v_dxvk_async=$(bool_to_yad "$($S get game.dxvk.async no)")
+v_vkd3d_fsr=$(bool_to_yad "$($S get game.vkd3d.fsr no)")
+
+v_log=$(bool_to_yad "$($S get game.log no)")
+
+# Helper: prepend current value to a combo list (so it stays selected)
+pick() {
+    local cur="$1"; shift
+    local rest="$*"
+    if [[ "$rest" == *"$cur"* ]]; then
+        # already in list; need to reorder so cur is first
+        local out="$cur"
+        for v in $rest; do
+            [[ "$v" == "$cur" ]] && continue
+            out="$out!$v"
+        done
+        echo "$out"
+    else
+        echo "${cur:+$cur!}$(echo "$rest" | tr ' ' '!')"
+    fi
+}
+
+cb_backend=$(pick "$v_backend" auto wayland x11)
+cb_render=$(pick "$v_rendering" opengl vulkan)
+cb_gov=$(pick "$v_gm_governor" performance powersave schedutil ondemand)
+cb_amd_icd=$(pick "$v_amd_icd" RADV AMDVLK amd_pro)
+cb_amd_perf=$(pick "$v_amd_perftest" aco llvm ngg sam gpl)
+cb_wine_rt=$(pick "$v_wine_runtime" auto proton-ge vanilla stable)
+cb_wine_fsr_s=$(pick "$v_wine_fsr_strength" 0 1 2 3 4 5)
+cb_dxvk_hud=$(pick "$v_dxvk_hud" off fps full "fps,gpuload,memory" "compiler,api,version")
+
+# Run yad form. NB: form fields are pipe-separated in output.
+result=$(yad --form \
+    --title="arch2ramos: Game Wrapper Settings" \
+    --text="Each knob below is read by arch2ram-runer when launching a game.\n\
+Boxes are global -- per-game overrides come in a future version." \
+    --width=620 --height=720 \
+    --separator="|" --item-separator="!" \
+    --field="── Overlays ──:LBL" "" \
+    --field="MangoHud (Vulkan/OpenGL HUD):CHK" "$v_mangohud" \
+    --field="  preset (empty=default):TXT" "$v_mangohud_preset" \
+    --field="── CPU / Process ──:LBL" "" \
+    --field="GameMode (CPU governor boost):CHK" "$v_gamemode" \
+    --field="  GameMode CPU governor:CB" "$cb_gov" \
+    --field="nice value (negative = higher prio):NUM" "$v_nice!-20..19!1" \
+    --field="CPU affinity (e.g. 0-7, empty = all):TXT" "$v_affinity" \
+    --field="── Rendering backends ──:LBL" "" \
+    --field="GDK/Qt/SDL backend policy:CB" "$cb_backend" \
+    --field="Renderer hint:CB" "$cb_render" \
+    --field="── AMD ──:LBL" "" \
+    --field="Vulkan ICD:CB" "$cb_amd_icd" \
+    --field="DRI_PRIME=1 (force discrete GPU):CHK" "$v_amd_dri" \
+    --field="RADV_PERFTEST:CB" "$cb_amd_perf" \
+    --field="RADV_DEBUG:TXT" "$v_amd_debug" \
+    --field="── NVIDIA ──:LBL" "" \
+    --field="GL sync to vblank:CHK" "$v_nv_vblank" \
+    --field="GL threaded optimizations:CHK" "$v_nv_thread" \
+    --field="PRIME render offload:CHK" "$v_nv_offload" \
+    --field="── Wine / Proton ──:LBL" "" \
+    --field="Wine runtime:CB" "$cb_wine_rt" \
+    --field="ESYNC:CHK" "$v_wine_esync" \
+    --field="FSYNC:CHK" "$v_wine_fsync" \
+    --field="Fullscreen FSR upscaling:CHK" "$v_wine_fsr" \
+    --field="  FSR strength:CB" "$cb_wine_fsr_s" \
+    --field="DLL overrides:TXT" "$v_wine_dll" \
+    --field="Custom WINEPREFIX:TXT" "$v_wine_prefix" \
+    --field="── DXVK / VKD3D ──:LBL" "" \
+    --field="DXVK HUD:CB" "$cb_dxvk_hud" \
+    --field="DXVK Async:CHK" "$v_dxvk_async" \
+    --field="VKD3D FSR:CHK" "$v_vkd3d_fsr" \
+    --field="── Logging ──:LBL" "" \
+    --field="Log stdout+stderr per game:CHK" "$v_log" \
+    --button="Save changes":0 \
+    --button="Cancel":1 \
+)
+rc=$?
+(( rc != 0 )) && exit 0
+
+# Parse pipe-separated output. Skip LBL labels (they show "" in output).
+IFS='|' read -ra fields <<<"$result"
+
+# Field indices (after LBL "── Overlays ──"):
+#  1=label_overlays  2=mangohud  3=preset
+#  4=label_cpu       5=gamemode  6=governor  7=nice  8=affinity
+#  9=label_render   10=backend  11=render
+# 12=label_amd      13=amd_icd  14=amd_dri  15=amd_perf  16=amd_debug
+# 17=label_nvidia   18=nv_vblank 19=nv_thread 20=nv_offload
+# 21=label_wine     22=wine_rt  23=esync  24=fsync  25=fsr  26=fsr_strength  27=dll  28=prefix
+# 29=label_dxvk     30=dxvk_hud  31=dxvk_async  32=vkd3d_fsr
+# 33=label_log      34=log
+
+$S set game.mangohud              "$(yad_to_bool "${fields[1]}")"
+$S set game.mangohud.preset       "${fields[2]}"
+$S set game.gamemode              "$(yad_to_bool "${fields[4]}")"
+$S set game.gamemode.governor     "${fields[5]}"
+$S set game.priority.nice         "${fields[6]}"
+$S set game.cpu.affinity          "${fields[7]}"
+$S set game.backend.policy        "${fields[9]}"
+$S set game.rendering             "${fields[10]}"
+$S set game.amd.vulkan-icd        "${fields[12]}"
+$S set game.amd.dri-prime         "$(yad_to_bool "${fields[13]}")"
+$S set game.amd.radv.perftest     "${fields[14]}"
+$S set game.amd.radv.debug        "${fields[15]}"
+$S set game.nvidia.sync-vblank    "$(yad_to_bool "${fields[17]}")"
+$S set game.nvidia.threaded-gl    "$(yad_to_bool "${fields[18]}")"
+$S set game.nvidia.prime-render-offload "$(yad_to_bool "${fields[19]}")"
+$S set game.wine.runtime          "${fields[21]}"
+$S set game.wine.esync            "$(yad_to_bool "${fields[22]}")"
+$S set game.wine.fsync            "$(yad_to_bool "${fields[23]}")"
+$S set game.wine.fsr              "$(yad_to_bool "${fields[24]}")"
+$S set game.wine.fsr.strength     "${fields[25]}"
+$S set game.wine.dll-overrides    "${fields[26]}"
+$S set game.wine.prefix           "${fields[27]}"
+$S set game.dxvk.hud              "${fields[29]}"
+$S set game.dxvk.async            "$(yad_to_bool "${fields[30]}")"
+$S set game.vkd3d.fsr             "$(yad_to_bool "${fields[31]}")"
+$S set game.log                   "$(yad_to_bool "${fields[33]}")"
+
+notify-send "arch2ramos" "Game wrapper settings saved." 2>/dev/null || true
+echo "saved."

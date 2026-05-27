@@ -23,11 +23,19 @@ SYSTEM="${1:?usage: $0 <SYSTEM> <ROM>}"
 # Log this launch for the "Recent" category
 [[ -n "$HOME" ]] && echo "$(date +%H:%M)  $SYSTEM  $(basename "$ROM" 2>/dev/null || echo "$ROM")" >> "$HOME/.arch2ram-recent.log" 2>/dev/null || true
 ROM="${2:?usage: $0 <SYSTEM> <ROM>}"
-RUNER="${RUNER:-/home/Guy008/Scripts/runer.sh}"
-
-# Fall back to plain exec if runer.sh missing (don't block the user).
-if [[ ! -x "$RUNER" ]]; then
-    RUNER=/usr/bin/env
+# RUNER selection order:
+#   1. $RUNER env override (advanced users)
+#   2. arch2ram-runer  (Lutris-style, reads from arch2ram-settings)
+#   3. /home/Guy008/Scripts/runer.sh  (user's pre-existing wrapper)
+#   4. /usr/bin/env (no-op fallback)
+if [[ -z "${RUNER:-}" ]]; then
+    if [[ -x /usr/local/bin/arch2ram-runer ]]; then
+        RUNER=/usr/local/bin/arch2ram-runer
+    elif [[ -x /home/Guy008/Scripts/runer.sh ]]; then
+        RUNER=/home/Guy008/Scripts/runer.sh
+    else
+        RUNER=/usr/bin/env
+    fi
 fi
 
 # Resolve libretro core path lazily so we don't fail at script-load.
@@ -143,6 +151,14 @@ case "$SYSTEM" in
     # arch2ram-emulationstation wrapper exit-loop picks it up and runs the
     # compositor inline. When you exit the compositor, ES comes back.
     desktop)
+        exec /bin/bash "$ROM"
+        ;;
+
+    # ─── Catalog — one-click install of curated software via yay/pacman ──────
+    # Each .sh calls arch2ram-catalog launch-if-installed. If the package
+    # is installed, the binary runs through runer.sh; otherwise konsole
+    # opens with yay -S and shows progress live.
+    catalog)
         exec /bin/bash "$ROM"
         ;;
 
