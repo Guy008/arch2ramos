@@ -5,19 +5,29 @@
 # /usr/local/bin/arch2ram-launch fires, the target binary takes over the
 # gamescope canvas, returns to ES on exit.
 #
-# This wrapper is more than "exec ES" -- it runs an exit-loop that honors
-# trigger files left by ES Actions:
+# This wrapper runs an exit-loop. Trigger files left by ES Actions:
 #
-#   /tmp/arch2ram.shutdown      -> poweroff
-#   /tmp/arch2ram.reboot        -> reboot
-#   /tmp/arch2ram.restart-es    -> relaunch ES (read config changes, etc.)
-#   /tmp/arch2ram.switch-mode=X -> systemctl start arch2ram-X.service, exit
-#                                  (X = gamescope, hyprland, kiosk)
-#   anything else / ES exited cleanly -> drop to a recovery konsole so
-#                                        the user isn't left at a black
-#                                        screen.
+#   /tmp/arch2ram.shutdown        -> poweroff
+#   /tmp/arch2ram.reboot          -> reboot
+#   /tmp/arch2ram.restart-es      -> relaunch ES (read config changes, etc.)
 #
-# This is the same pattern Batocera's emulationstation-standalone uses.
+# Sibling-compositor flags (the "compositor-as-an-app" pattern):
+#
+#   /tmp/arch2ram.run-hyprland    -> run hyprland (with its own DRM, no
+#                                    gamescope wrapping), then return to ES
+#   /tmp/arch2ram.run-steam-bpm   -> run gamescope+Steam Big Picture,
+#                                    then return to ES
+#   /tmp/arch2ram.run-kiosk       -> run cage+konsole kiosk shell,
+#                                    then return to ES
+#
+# Each "run-*" flag is dropped before the compositor runs, and the loop
+# falls through to ES on exit. The Action scripts in ~/ES/actions/ just
+# `touch` the flag and `pkill emulationstation` -- the wrapper handles
+# the rest.
+#
+# This is the same pattern Batocera's emulationstation-standalone uses
+# but extended to treat every compositor as just another "app" in the
+# launcher.
 
 set -u   # not -e; we WANT to keep going if ES segfaults
 
@@ -36,7 +46,6 @@ if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
     chmod 700 "$XDG_RUNTIME_DIR"
 fi
 export XDG_SESSION_TYPE=wayland
-export XDG_CURRENT_DESKTOP=gamescope
 
 # Hebrew/English keyboard
 export XKB_DEFAULT_LAYOUT=us,il
@@ -66,10 +75,15 @@ clear_triggers() {
     rm -f /tmp/arch2ram.shutdown \
           /tmp/arch2ram.reboot \
           /tmp/arch2ram.restart-es \
+          /tmp/arch2ram.run-hyprland \
+          /tmp/arch2ram.run-steam-bpm \
+          /tmp/arch2ram.run-kiosk \
           /tmp/arch2ram.switch-mode* 2>/dev/null
 }
 
-handle_triggers() {
+handle_exit_triggers() {
+    # Called after ES exits or a "run-*" compositor exits. Handles only
+    # shutdown/reboot here; run-* triggers are checked at the top of the loop.
     if [[ -f /tmp/arch2ram.shutdown ]]; then
         rm -f /tmp/arch2ram.shutdown
         echo "arch2ram-emulationstation: shutdown trigger"
@@ -82,23 +96,39 @@ handle_triggers() {
         systemctl reboot
         exit 0
     fi
-    for mode_flag in /tmp/arch2ram.switch-mode-*; do
-        [[ -e "$mode_flag" ]] || continue
-        mode="${mode_flag##*switch-mode-}"
-        rm -f "$mode_flag"
-        echo "arch2ram-emulationstation: switching to mode '$mode'"
-        case "$mode" in
-            gamescope|hyprland|kiosk)
-                systemctl start "arch2ram-${mode}.service" &
-                exit 0
-                ;;
-            *)
-                echo "  unknown mode: $mode"
-                ;;
-        esac
-    done
-    # Otherwise: signal "loop" or "fall through to recovery" by reading exit code
 }
+
+# -------- "run X as an app" handlers -----------------------------------------
+#
+# Each function blocks until the compositor exits, then returns. The caller
+# (the main loop) will `continue` which relaunches ES.
+
+run_hyprland() {
+    echo "arch2ram-emulationstation: running Hyprland as a sibling compositor"
+    # Hyprland takes the DRM directly -- gamescope is NOT in the picture here.
+    # Config: /etc/arch2ram/hyprland-ram.conf (same one arch2ram-hyprland uses).
+    XDG_CURRENT_DESKTOP=Hyprland \
+        setpriv --ambient-caps '-all' \
+            hyprland --config /etc/arch2ram/hyprland-ram.conf
+}
+
+run_steam_bpm() {
+    echo "arch2ram-emulationstation: running Steam Big Picture in gamescope"
+    XDG_CURRENT_DESKTOP=gamescope \
+        setpriv --ambient-caps '-all' \
+            gamescope -W "$WIDTH" -H "$HEIGHT" -r "$RATE" -f \
+                --force-grab-cursor --adaptive-sync \
+                -- steam -tenfoot
+}
+
+run_kiosk() {
+    echo "arch2ram-emulationstation: running kiosk (cage+konsole)"
+    XDG_CURRENT_DESKTOP=cage \
+        setpriv --ambient-caps '-all' \
+            cage -- konsole --profile arch2ram-kiosk
+}
+
+# -------- recovery shell -----------------------------------------------------
 
 recovery_shell() {
     # Last-resort: drop into a terminal inside gamescope so the screen isn't
@@ -128,27 +158,59 @@ MAX_RAPID_RESTARTS=5
 while true; do
     LAST_START=$(date +%s)
 
+    # ── Sibling-compositor pre-checks ──────────────────────────────────────
+    # If a "run X" flag was set (typically by an ES Action), run that
+    # compositor in place of ES this iteration, then loop -- which will
+    # re-launch ES on the next pass.
+    if [[ -f /tmp/arch2ram.run-hyprland ]]; then
+        rm -f /tmp/arch2ram.run-hyprland
+        run_hyprland
+        echo "arch2ram-emulationstation: Hyprland exited -- returning to ES"
+        continue
+    fi
+    if [[ -f /tmp/arch2ram.run-steam-bpm ]]; then
+        rm -f /tmp/arch2ram.run-steam-bpm
+        run_steam_bpm
+        echo "arch2ram-emulationstation: Steam BPM exited -- returning to ES"
+        continue
+    fi
+    if [[ -f /tmp/arch2ram.run-kiosk ]]; then
+        rm -f /tmp/arch2ram.run-kiosk
+        run_kiosk
+        echo "arch2ram-emulationstation: kiosk exited -- returning to ES"
+        continue
+    fi
+
+    # ── Default: launch ES inside gamescope ────────────────────────────────
     echo "arch2ram-emulationstation: gamescope ${WIDTH}x${HEIGHT}@${RATE} -> emulationstation"
 
-    # Drop ambient caps so bwrap (Steam runtime, glycin, Firefox) works inside.
-    setpriv --ambient-caps '-all' \
-        gamescope \
-            -W "$WIDTH" -H "$HEIGHT" -r "$RATE" \
-            -f \
-            --force-grab-cursor \
-            --adaptive-sync \
-            -- \
-            emulationstation --no-splash
+    XDG_CURRENT_DESKTOP=gamescope \
+        setpriv --ambient-caps '-all' \
+            gamescope \
+                -W "$WIDTH" -H "$HEIGHT" -r "$RATE" \
+                -f \
+                --force-grab-cursor \
+                --adaptive-sync \
+                -- \
+                emulationstation --no-splash
     ES_EXIT=$?
 
     echo "arch2ram-emulationstation: ES exited with code $ES_EXIT"
 
-    # Check trigger files first -- they take priority over exit code
-    handle_triggers
+    # Shutdown / reboot triggers (these terminate the loop).
+    handle_exit_triggers
 
     if [[ -f /tmp/arch2ram.restart-es ]]; then
         rm -f /tmp/arch2ram.restart-es
         echo "arch2ram-emulationstation: restart trigger -- relaunching"
+        continue
+    fi
+
+    # If a run-* flag was written DURING the ES session, the next loop
+    # iteration will pick it up at the top.
+    if [[ -f /tmp/arch2ram.run-hyprland || \
+          -f /tmp/arch2ram.run-steam-bpm || \
+          -f /tmp/arch2ram.run-kiosk ]]; then
         continue
     fi
 
