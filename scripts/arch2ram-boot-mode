@@ -21,9 +21,13 @@ case "$mode" in
     emulationstation) target=arch2ram-emulationstation.service ;;
     hyprland)         target=arch2ram-hyprland.service ;;
     kiosk)            target=arch2ram-kiosk.service ;;
+    debug|recovery)
+        echo "arch2ram-boot-mode: debug mode -- staying at multi-user.target"
+        exit 0
+        ;;
     *)
-        echo "arch2ram-boot-mode: unknown mode '$mode', falling back to gamescope" >&2
-        target=arch2ram-gamescope.service
+        echo "arch2ram-boot-mode: unknown mode '$mode', falling back to emulationstation" >&2
+        target=arch2ram-emulationstation.service
         ;;
 esac
 

@@ -135,28 +135,33 @@ else
 fi
 
 # Mode labels (used both for entry creation and for cleanup of older versions)
+LABEL_SINGLE="Arch Linux from RAM"
 LABEL_GAMESCOPE="Arch Linux from RAM (gamescope)"
 LABEL_ES="Arch Linux from RAM (EmulationStation)"
 LABEL_KIOSK="Arch Linux from RAM (kiosk)"
 LABEL_HYPRLAND="Arch Linux from RAM (hyprland)"
 LABEL_DEBUG="Arch Linux from RAM (debug TTY)"
-LABEL_LEGACY="Arch Linux from RAM"   # old single-entry name, scrubbed if found
+LABEL_LEGACY="Arch Linux from RAM"   # alias for LABEL_SINGLE for cleanup
 
 # Parse flags
 WANT_GAMESCOPE=1
 WANT_ES=auto         # 1=force install ES from AUR, 0=skip, auto=enable iff ES is installed
 WANT_KIOSK=1
 WANT_HYPRLAND=auto   # 1=force, 0=skip, auto=enable iff hyprland is installed
-DEFAULT_MODE=gamescope    # which entry to put first (becomes GRUB default)
+DEFAULT_MODE=emulationstation  # default boot mode (cmdline-passed for boot-mode orchestrator)
+GRUB_MODE=single     # single: one RAM entry + debug fallback. multi: per-mode entries (legacy)
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-gamescope)         WANT_GAMESCOPE=0; [[ "$DEFAULT_MODE" == "gamescope" ]] && DEFAULT_MODE=kiosk ;;
-        --no-emulationstation)  WANT_ES=0 ;;
+        --no-gamescope)         WANT_GAMESCOPE=0; [[ "$DEFAULT_MODE" == "gamescope" ]] && DEFAULT_MODE=emulationstation ;;
+        --no-emulationstation)  WANT_ES=0; [[ "$DEFAULT_MODE" == "emulationstation" ]] && DEFAULT_MODE=gamescope ;;
         --with-emulationstation) WANT_ES=1 ;;
-        --no-kiosk)             WANT_KIOSK=0; [[ "$DEFAULT_MODE" == "kiosk" ]] && DEFAULT_MODE=hyprland ;;
+        --no-kiosk)             WANT_KIOSK=0; [[ "$DEFAULT_MODE" == "kiosk" ]] && DEFAULT_MODE=emulationstation ;;
         --no-hyprland)          WANT_HYPRLAND=0 ;;
         --with-hyprland)        WANT_HYPRLAND=1 ;;
         --default=*)            DEFAULT_MODE="${1#*=}" ;;
+        --grub=*)               GRUB_MODE="${1#*=}" ;;
+        --grub-single)          GRUB_MODE=single ;;
+        --grub-multi)           GRUB_MODE=multi ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's|^# \?||'
             exit 0
@@ -430,9 +435,23 @@ ${UCODE_LINES}    initrd ${INITRD_PATH}
 GRUBEOF
 }
 
-# Build the entries — emit DEFAULT_MODE first so it lands at GRUB index 0
+# Build the entries.
+#
+# Two emission modes:
+#   single (default, recommended):
+#       One "Arch Linux from RAM" entry that boots into DEFAULT_MODE via
+#       boot-mode orchestrator, plus a debug TTY fallback. Mode switching
+#       happens IN-SESSION via ES Actions ("Switch to Hyprland", etc.) --
+#       no more reboots needed to swap launcher.
+#
+#   multi (legacy):
+#       Per-mode entries (gamescope/ES/kiosk/hyprland) plus debug. Useful
+#       for testing or when ES isn't available.
 NEW_ENTRIES=""
-LABELS_TO_REPLACE=("$LABEL_LEGACY" "$LABEL_DEBUG")
+LABELS_TO_REPLACE=(
+    "$LABEL_SINGLE" "$LABEL_DEBUG"
+    "$LABEL_GAMESCOPE" "$LABEL_ES" "$LABEL_KIOSK" "$LABEL_HYPRLAND"
+)
 
 emit_mode() {
     local mode="$1"
@@ -440,34 +459,35 @@ emit_mode() {
         gamescope)
             (( WANT_GAMESCOPE )) || return 0
             NEW_ENTRIES+="$(emit_entry "$LABEL_GAMESCOPE" "systemd.unit=multi-user.target arch2ram.mode=gamescope")"$'\n'
-            LABELS_TO_REPLACE+=("$LABEL_GAMESCOPE")
             ;;
         es|emulationstation)
             (( HAS_ES )) || return 0
             NEW_ENTRIES+="$(emit_entry "$LABEL_ES" "systemd.unit=multi-user.target arch2ram.mode=emulationstation")"$'\n'
-            LABELS_TO_REPLACE+=("$LABEL_ES")
             ;;
         kiosk)
             (( WANT_KIOSK )) || return 0
             NEW_ENTRIES+="$(emit_entry "$LABEL_KIOSK" "systemd.unit=multi-user.target arch2ram.mode=kiosk")"$'\n'
-            LABELS_TO_REPLACE+=("$LABEL_KIOSK")
             ;;
         hyprland)
             (( HAS_HYPRLAND )) || return 0
             NEW_ENTRIES+="$(emit_entry "$LABEL_HYPRLAND" "systemd.unit=multi-user.target arch2ram.mode=hyprland")"$'\n'
-            LABELS_TO_REPLACE+=("$LABEL_HYPRLAND")
             ;;
     esac
 }
 
-# Default mode first (becomes GRUB index 0), then the rest in canonical order.
-emit_mode "$DEFAULT_MODE"
-for m in gamescope es kiosk hyprland; do
-    [[ "$m" == "$DEFAULT_MODE" ]] && continue
-    [[ "es" == "$DEFAULT_MODE" && "$m" == "es" ]] && continue
-    emit_mode "$m"
-done
-NEW_ENTRIES+="$(emit_entry "$LABEL_DEBUG" "systemd.unit=multi-user.target")"$'\n'
+if [[ "$GRUB_MODE" == "single" ]]; then
+    # One entry; cmdline carries arch2ram.mode=DEFAULT_MODE for boot-mode.
+    NEW_ENTRIES+="$(emit_entry "$LABEL_SINGLE" "systemd.unit=multi-user.target arch2ram.mode=$DEFAULT_MODE")"$'\n'
+else
+    # Multi mode: default mode first (GRUB index 0), then the rest.
+    emit_mode "$DEFAULT_MODE"
+    for m in gamescope es kiosk hyprland; do
+        [[ "$m" == "$DEFAULT_MODE" ]] && continue
+        [[ "es" == "$DEFAULT_MODE" && "$m" == "es" ]] && continue
+        emit_mode "$m"
+    done
+fi
+NEW_ENTRIES+="$(emit_entry "$LABEL_DEBUG" "systemd.unit=multi-user.target arch2ram.mode=debug")"$'\n'
 
 echo "[5/6] Writing GRUB entries to $GRUB_CUSTOM..."
 echo "      boot UUID:    $BOOT_UUID  (source: $BOOT_SRC)"
@@ -475,6 +495,7 @@ echo "      root UUID:    $ROOT_UUID"
 echo "      kernel path:  $KERNEL_PATH"
 echo "      modes:        gamescope=$WANT_GAMESCOPE es=$HAS_ES kiosk=$WANT_KIOSK hyprland=$HAS_HYPRLAND debug=1"
 echo "      default:      $DEFAULT_MODE"
+echo "      GRUB layout:  $GRUB_MODE"
 
 # Rewrite custom file: keep header + entries with labels not in our managed set,
 # then append our entries.
@@ -510,14 +531,26 @@ fi
 echo ""
 echo "=== Done ==="
 echo ""
-echo "Boot modes installed:"
-(( WANT_GAMESCOPE )) && echo "  • $LABEL_GAMESCOPE (gamescope + Steam Big Picture)"
-(( HAS_ES ))         && echo "  • $LABEL_ES (gamescope + EmulationStation)"
-(( WANT_KIOSK ))     && echo "  • $LABEL_KIOSK   (cage, single fullscreen app)"
-(( HAS_HYPRLAND ))   && echo "  • $LABEL_HYPRLAND (multi-window desktop)"
-echo "  • $LABEL_DEBUG (tty only, ssh/diagnostics)"
+echo "Boot modes installed (systemd services):"
+(( WANT_GAMESCOPE )) && echo "  • gamescope        (gamescope + Steam Big Picture)"
+(( HAS_ES ))         && echo "  • emulationstation (gamescope + EmulationStation)"
+(( WANT_KIOSK ))     && echo "  • kiosk            (cage, single fullscreen app)"
+(( HAS_HYPRLAND ))   && echo "  • hyprland         (multi-window desktop)"
 echo ""
-echo "  Default (GRUB index 0): $DEFAULT_MODE mode"
+if [[ "$GRUB_MODE" == "single" ]]; then
+    echo "GRUB entries:"
+    echo "  • $LABEL_SINGLE  (boots into '$DEFAULT_MODE' -- switchable in-session)"
+    echo "  • $LABEL_DEBUG   (tty only, ssh/diagnostics)"
+else
+    echo "GRUB entries:"
+    (( WANT_GAMESCOPE )) && echo "  • $LABEL_GAMESCOPE"
+    (( HAS_ES ))         && echo "  • $LABEL_ES"
+    (( WANT_KIOSK ))     && echo "  • $LABEL_KIOSK"
+    (( HAS_HYPRLAND ))   && echo "  • $LABEL_HYPRLAND"
+    echo "  • $LABEL_DEBUG (tty only, ssh/diagnostics)"
+fi
+echo ""
+echo "  Default boot mode: $DEFAULT_MODE"
 echo ""
 echo "Next: sudo arch2ram-create     (build the squashfs, ~5 min)"
 echo "Then: reboot → select a mode in GRUB"
