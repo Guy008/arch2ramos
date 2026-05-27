@@ -34,6 +34,7 @@ KIOSK_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-kiosk"
 HYPRLAND_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-hyprland"
 GAMESCOPE_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-gamescope"
 ES_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-emulationstation"
+ES_DISCOVER_SRC="${PROJECT_DIR}/scripts/arch2ram-es-discover"
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -54,6 +55,7 @@ KIOSK_SCRIPT_DST="/usr/local/bin/arch2ram-kiosk"
 HYPRLAND_SCRIPT_DST="/usr/local/bin/arch2ram-hyprland"
 GAMESCOPE_SCRIPT_DST="/usr/local/bin/arch2ram-gamescope"
 ES_SCRIPT_DST="/usr/local/bin/arch2ram-emulationstation"
+ES_DISCOVER_DST="/usr/local/bin/arch2ram-es-discover"
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
 HYPRLAND_UNIT_DST="/etc/systemd/system/arch2ram-hyprland.service"
@@ -236,27 +238,21 @@ fi
 
 # EmulationStation (gamescope + ES launcher with category-based systems)
 if (( HAS_ES )); then
-    install -Dm755 "$ES_SCRIPT_SRC" "$ES_SCRIPT_DST"
-    install -Dm644 "$ES_UNIT_SRC"   "$ES_UNIT_DST"
-    install -Dm644 "$ES_CONF_SRC"   "$ES_CONF_DST"
+    install -Dm755 "$ES_SCRIPT_SRC"    "$ES_SCRIPT_DST"
+    install -Dm755 "$ES_DISCOVER_SRC"  "$ES_DISCOVER_DST"
+    install -Dm644 "$ES_UNIT_SRC"      "$ES_UNIT_DST"
+    install -Dm644 "$ES_CONF_SRC"      "$ES_CONF_DST"
     systemctl enable arch2ram-emulationstation.service >/dev/null 2>&1 || true
-    echo "      emulationstation: script + service + es_systems.cfg"
-    # Ensure the /home/$USER/ES/ tree exists with at least sample wrappers,
-    # so ES has something to show on first launch. Don't overwrite existing.
+    echo "      emulationstation: script + discover + service + es_systems.cfg"
+
+    # Run the discovery script as the user — it populates ~/ES/ from
+    # /usr/share/applications/, /media/G/Linux/, /media/G/Windows/.
+    # Idempotent — safe to re-run later.
     user="${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}"
     home="$(getent passwd "$user" | cut -d: -f6)"
-    for cat in games apps tools; do
-        sudo -u "$user" mkdir -p "$home/ES/$cat"
-    done
-    # Drop a "Hello" placeholder in apps if it's empty (so ES has SOMETHING)
-    if [[ -z "$(ls -A "$home/ES/apps" 2>/dev/null)" ]]; then
-        sudo -u "$user" tee "$home/ES/apps/welcome.sh" >/dev/null <<'WELCOMEEOF'
-#!/bin/bash
-exec /usr/bin/konsole --hold -e 'echo "Welcome to arch2ramos. Add wrappers to ~/ES/{games,apps,tools}/"; read'
-WELCOMEEOF
-        sudo -u "$user" chmod +x "$home/ES/apps/welcome.sh"
-    fi
-    echo "      emulationstation: ensured $home/ES/{games,apps,tools}/ exists"
+    echo "      emulationstation: running discovery as $user (populates $home/ES/)..."
+    sudo -u "$user" "$ES_DISCOVER_DST" || \
+        echo "      WARNING: discovery had errors — re-run manually: $ES_DISCOVER_DST"
 else
     echo "      emulationstation: skipped (not installed)"
 fi

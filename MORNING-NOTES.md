@@ -2,7 +2,7 @@
 
 Date: 2026-05-27 (overnight session)
 Backup commit (rollback point): `dba4f2e`
-Final commit: `c38cd14`
+Final commit: `e974d1a` (+ pending install.sh update)
 
 ## TL;DR
 
@@ -10,14 +10,33 @@ Final commit: `c38cd14`
 + Phase 1: package-level stripping via pacman -Qlq (opt-in via /etc/arch2ram/strip-packages.conf)
 + Phase 2: runer.sh — 3 bug fixes (backup at runer.sh.bak.YYYYMMDD-HHMMSS)
 + Phase 3: EmulationStation 2.11.2 installed from AUR (~149MB)
-+ Phase 4: /etc/emulationstation/es_systems.cfg with 3 categories (Games / Apps / Tools)
-+ Phase 5: arch2ram.mode=emulationstation — new boot mode, new GRUB entry
-+ Phase 6: tested ES in current X11/Wayland session — loads OK
-+ Phase 7: new squashfs built (4.5GB)
-+ Phase 8: arch2ram-install updated to handle ES mode end-to-end
++ Phase 4: /etc/emulationstation/es_systems.cfg with REAL category sources:
+            apps    ← /usr/share/applications/*.desktop (111 visible apps)
+            linux   ← /media/G/Linux/ (12 games auto-discovered)
+            windows ← /media/G/Windows/ (20 games via wine)
+            steam   ← Steam Big Picture single entry
++ Phase 5: arch2ram-es-discover script — populates ~/ES/ from real sources
++ Phase 6: arch2ram.mode=emulationstation — new boot mode, new GRUB entry
++ Phase 7: tested ES in current X11/Wayland session — loads OK, finds all 4
++ Phase 8: new squashfs built (4.5GB)
++ Phase 9: arch2ram-install updated to handle ES end-to-end + auto-discovery
 ```
 
-5 git commits pushed. **Default boot is still gamescope** (untouched). ES is GRUB index 1 (manual select).
+6 git commits pushed. **Default boot is still gamescope** (untouched). ES is GRUB index 1.
+
+## Lutris integration is automatic
+
+Lutris exports games as `.desktop` files into `/usr/share/applications/`
+(via "Create application menu shortcut" per-game). These will appear
+in the **Apps** category automatically — including all per-game settings
+(HDR, FSR, runtime overrides, etc.) baked into Lutris's launch command.
+
+To add a Lutris game to ES:
+1. In Lutris: right-click game → "Create application menu shortcut"
+2. Run: `arch2ram-es-discover` (or it'll be picked up next time install runs)
+3. Game appears in Apps in ES.
+
+Same flow for Steam — "Create desktop shortcut" from Steam right-click.
 
 ---
 
