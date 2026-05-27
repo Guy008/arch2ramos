@@ -20,6 +20,8 @@
 set -e
 
 SYSTEM="${1:?usage: $0 <SYSTEM> <ROM>}"
+# Log this launch for the "Recent" category
+[[ -n "$HOME" ]] && echo "$(date +%H:%M)  $SYSTEM  $(basename "$ROM" 2>/dev/null || echo "$ROM")" >> "$HOME/.arch2ram-recent.log" 2>/dev/null || true
 ROM="${2:?usage: $0 <SYSTEM> <ROM>}"
 RUNER="${RUNER:-/home/Guy008/Scripts/runer.sh}"
 
