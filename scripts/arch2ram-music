@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 """arch2ram-music — discover audio files and create ES symlinks.
 
-Scans user-configured paths for audio files and symlinks each into
-~/ES/music/. Optionally groups by artist or album subdirectory.
+Scans user-configured paths for audio files. Two modes:
+
+  flat        — all songs flat under ~/ES/music/  (default)
+  --by-artist — organize by Artist folder using ID3 (ffprobe) or
+                filename heuristics. ES shows artists as folders.
 
 Default scan paths:
   ~/Music
   /media/B/Music   (if exists)
   /media/D/Music   (if exists)
-  /media/A         (top-level audio files only — user had some there)
 
-Symlink-mode: links are flat in ~/ES/music/ (ES doesn't recurse into
-subdirs by default unless told). Filename = original filename (cleaned).
-
-Idempotent. Re-running cleans + re-populates only the auto-generated
-symlinks (kept hand-added .sh files alone).
+Symlink-mode: never copies files. Idempotent: re-running cleans + re-
+populates only the auto-generated symlinks.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,11 +33,61 @@ DEFAULT_PATHS = [
     HOME / "Music",
     Path("/media/B/Music"),
     Path("/media/D/Music"),
-    Path("/media/A"),
 ]
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav", ".aac", ".wma"}
-MAX_DEPTH = 4   # how deep to recurse
+MAX_DEPTH = 4
+
+
+# ─── tag extraction ───────────────────────────────────────────────────────
+
+
+def get_artist_via_ffprobe(path: Path) -> str | None:
+    """Read 'artist' tag from a media file via ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(path)],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        tags = data.get("format", {}).get("tags", {})
+        # ID3 tags can be artist / ARTIST / album_artist / TPE1 etc.
+        for key in ("artist", "ARTIST", "album_artist", "ALBUM_ARTIST"):
+            if key in tags and tags[key].strip():
+                return tags[key].strip()
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        pass
+    return None
+
+
+# Common filename patterns we see in this user's library:
+#   "- - 00 - Artist-Title.mp3"
+#   "Artist - Title.mp3"
+#   "Artist_Title.mp3"
+_FNAME_PATTERNS = [
+    re.compile(r"^[\s\-_]*\d*\s*-\s*(?P<artist>[^-]+?)-(?P<title>.+)\..*$"),
+    re.compile(r"^(?P<artist>[^-]+?)\s+-\s+(?P<title>.+)\..*$"),
+]
+
+
+def get_artist_from_filename(path: Path) -> str | None:
+    name = path.stem
+    for pat in _FNAME_PATTERNS:
+        m = pat.match(name)
+        if m:
+            artist = m.group("artist").strip()
+            if artist and len(artist) < 80:
+                return artist
+    return None
+
+
+def sanitize_dir_name(name: str, max_len: int = 60) -> str:
+    name = name.strip()
+    name = re.sub(r"[/\0\n\r\t]+", " ", name)
+    name = re.sub(r"\s+", " ", name)
+    return name[:max_len].rstrip() if len(name) > max_len else name
 
 
 def sanitize_link_name(name: str, max_len: int = 80) -> str:
@@ -44,7 +95,8 @@ def sanitize_link_name(name: str, max_len: int = 80) -> str:
     name = re.sub(r"[/\0\n\r\t]+", " ", name)
     name = re.sub(r"\s+", " ", name)
     if len(name) > max_len:
-        name = name[:max_len - len(Path(name).suffix)] + Path(name).suffix
+        ext = Path(name).suffix
+        name = name[:max_len - len(ext)] + ext
     return name
 
 
@@ -62,24 +114,41 @@ def walk_audio(root: Path, max_depth: int):
             yield path
 
 
+# ─── main ─────────────────────────────────────────────────────────────────
+
+
+def clean_existing_symlinks(root: Path):
+    """Recursively remove our own symlinks. Leave real files alone."""
+    removed_links = 0
+    removed_dirs = 0
+    for child in list(root.rglob("*")):
+        if child.is_symlink():
+            child.unlink()
+            removed_links += 1
+    # Then clean now-empty dirs (top-down)
+    for child in sorted(root.glob("*"), key=lambda p: -len(p.parts)):
+        if child.is_dir():
+            try:
+                child.rmdir()
+                removed_dirs += 1
+            except OSError:
+                pass
+    return removed_links, removed_dirs
+
+
 def main():
-    p = argparse.ArgumentParser(description="Scan paths for audio, symlink into ~/ES/music.")
-    p.add_argument("--path", "-p", action="append", default=[],
-                   help="Extra path to scan (can repeat).")
+    p = argparse.ArgumentParser(description="Scan paths for audio, link into ~/ES/music.")
+    p.add_argument("--path", "-p", action="append", default=[])
     p.add_argument("--max-depth", "-d", type=int, default=MAX_DEPTH)
-    p.add_argument("--no-defaults", action="store_true",
-                   help="Don't scan the default paths.")
+    p.add_argument("--no-defaults", action="store_true")
+    p.add_argument("--by-artist", action="store_true",
+                   help="Group by Artist folder (uses ffprobe + filename heuristics).")
     args = p.parse_args()
 
     ES_MUSIC.mkdir(parents=True, exist_ok=True)
 
-    # Clean previous symlinks (we own all symlinks; leave real files alone).
-    cleaned = 0
-    for f in ES_MUSIC.iterdir():
-        if f.is_symlink():
-            f.unlink()
-            cleaned += 1
-    print(f"Cleaned {cleaned} stale symlinks.")
+    links_cleaned, dirs_cleaned = clean_existing_symlinks(ES_MUSIC)
+    print(f"Cleaned {links_cleaned} stale symlinks, {dirs_cleaned} empty dirs.")
 
     paths = []
     if not args.no_defaults:
@@ -87,42 +156,52 @@ def main():
     paths.extend(Path(p).expanduser() for p in args.path)
 
     seen_targets = set()
-    total = 0
-    per_path = {}
+    total_linked = 0
+    by_artist_counts = {}
 
     for root in paths:
         if not root.exists():
             continue
-        count = 0
         for src in walk_audio(root, args.max_depth):
-            # Avoid duplicates (symlinks pointing at the same file)
             real = src.resolve()
             if real in seen_targets:
                 continue
             seen_targets.add(real)
 
-            # Create symlink. Filename = sanitized original.
+            if args.by_artist:
+                # Try ffprobe first, then filename heuristic
+                artist = (get_artist_via_ffprobe(src)
+                          or get_artist_from_filename(src)
+                          or "Unknown")
+                artist_dir = ES_MUSIC / sanitize_dir_name(artist)
+                artist_dir.mkdir(exist_ok=True)
+                by_artist_counts[artist] = by_artist_counts.get(artist, 0) + 1
+            else:
+                artist_dir = ES_MUSIC
+
             link_name = sanitize_link_name(src.name)
-            link_path = ES_MUSIC / link_name
+            link_path = artist_dir / link_name
             suffix = 0
             while link_path.exists():
                 suffix += 1
                 stem = link_path.stem
                 ext = link_path.suffix
-                link_path = ES_MUSIC / f"{stem} ({suffix}){ext}"
+                link_path = artist_dir / f"{stem} ({suffix}){ext}"
             try:
                 link_path.symlink_to(src)
-                count += 1
-                total += 1
+                total_linked += 1
             except OSError as e:
-                print(f"  WARN: link failed for {src}: {e}", file=sys.stderr)
-        per_path[str(root)] = count
+                print(f"  WARN: link failed {src}: {e}", file=sys.stderr)
 
-    print()
-    print("Per-path discoveries:")
-    for path, count in per_path.items():
-        print(f"  {path}: {count}")
-    print(f"\nTotal: {total} audio files linked to {ES_MUSIC}")
+    if args.by_artist:
+        print(f"\nGrouped {total_linked} tracks into {len(by_artist_counts)} artist folders:")
+        for artist, count in sorted(by_artist_counts.items(),
+                                     key=lambda x: -x[1])[:15]:
+            print(f"  {count:4d}  {artist[:60]}")
+        if len(by_artist_counts) > 15:
+            print(f"  ... and {len(by_artist_counts) - 15} more.")
+    else:
+        print(f"\nTotal: {total_linked} audio files linked flat to {ES_MUSIC}")
 
 
 if __name__ == "__main__":
