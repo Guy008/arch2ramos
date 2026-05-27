@@ -38,16 +38,32 @@ echo "=== arch2ram-uninstall ==="
 echo ""
 
 echo "[1/6] Disabling + removing systemd services..."
-for svc in arch2ram-drm-fixup.service arch2ram-kiosk.service arch2ram-hyprland.service; do
+for svc in arch2ram-drm-fixup.service arch2ram-kiosk.service arch2ram-hyprland.service \
+           arch2ram-gamescope.service arch2ram-emulationstation.service \
+           arch2ram-boot-mode.service; do
     systemctl disable "$svc" >/dev/null 2>&1 || true
     rm -vf "/etc/systemd/system/$svc"
 done
+# Sprint 1: leave triggerhappy installed (user may want it), only strip our drop-in
+rm -vrf /etc/systemd/system/triggerhappy.service.d
+systemctl disable triggerhappy.service >/dev/null 2>&1 || true
 systemctl daemon-reload || true
 
 echo "[2/6] Removing scripts + helpers..."
 rm -vf /usr/local/bin/arch2ram-drm-fixup
 rm -vf /usr/local/bin/arch2ram-kiosk
 rm -vf /usr/local/bin/arch2ram-hyprland
+rm -vf /usr/local/bin/arch2ram-gamescope
+rm -vf /usr/local/bin/arch2ram-emulationstation
+rm -vf /usr/local/bin/arch2ram-boot-mode
+# Sprint 1 helpers
+rm -vf /usr/local/bin/arch2ram-th-run
+rm -vf /usr/local/bin/arch2ram-mouse
+rm -vf /usr/local/bin/arch2ram-screenshot
+rm -vf /usr/local/bin/arch2ram-help
+rm -vf /usr/local/bin/arch2ram-brightness
+rm -vf /usr/local/bin/arch2ram-kill-foreground
+rm -vf /etc/triggerhappy/triggers.d/arch2ram.conf
 rm -vf /etc/systemd/user-environment-generators/10-arch2ram-drm
 rm -vf /usr/share/konsole/arch2ram-kiosk.profile
 

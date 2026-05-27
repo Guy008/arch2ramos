@@ -1,0 +1,52 @@
+#!/bin/bash
+# arch2ram-brightness — adjust backlight by percentage.
+#
+# Reads /sys/class/backlight/<first-device>/max_brightness, applies a
+# percentage delta to /sys/class/backlight/<first-device>/brightness.
+# Silent no-op if no backlight device is present (desktop systems).
+#
+# Usage:  arch2ram-brightness +5     (raise by 5% of max)
+#         arch2ram-brightness -10    (lower by 10% of max)
+#         arch2ram-brightness =50    (set to 50% of max)
+
+set -e
+
+DELTA="${1:-+5}"
+
+# pick first backlight device
+BL_DIR=""
+for d in /sys/class/backlight/*; do
+    [[ -d "$d" ]] || continue
+    BL_DIR="$d"
+    break
+done
+
+if [[ -z "$BL_DIR" ]]; then
+    exit 0   # no backlight, silent
+fi
+
+MAX=$(cat "$BL_DIR/max_brightness")
+CUR=$(cat "$BL_DIR/brightness")
+SIGN="${DELTA:0:1}"
+VAL="${DELTA:1}"
+
+case "$SIGN" in
+    +) NEW=$(( CUR + MAX * VAL / 100 )) ;;
+    -) NEW=$(( CUR - MAX * VAL / 100 )) ;;
+    =) NEW=$(( MAX * VAL / 100 )) ;;
+    *) echo "usage: arch2ram-brightness {+|-|=}<percent>" >&2; exit 64 ;;
+esac
+
+(( NEW < 1 )) && NEW=1
+(( NEW > MAX )) && NEW=MAX
+
+echo "$NEW" > "$BL_DIR/brightness"
+
+# OSD feedback if possible
+PCT=$(( NEW * 100 / MAX ))
+if command -v osd_cat >/dev/null 2>&1 && [[ -n "$DISPLAY" ]]; then
+    echo "☀ ${PCT}%" | osd_cat --pos=bottom --align=center --color=yellow \
+        --font='-*-helvetica-bold-r-*-*-24-*-*-*-*-*-*-*' \
+        --delay=1 --offset=80 >/dev/null 2>&1 &
+    disown
+fi

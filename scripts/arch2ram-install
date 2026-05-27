@@ -41,6 +41,17 @@ ES_MUSIC_SRC="${PROJECT_DIR}/scripts/arch2ram-music"
 ES_DISCOVER_ALL_SRC="${PROJECT_DIR}/scripts/arch2ram-discover-all"
 ES_NEWS_SRC="${PROJECT_DIR}/scripts/arch2ram-news"
 ES_THEME_GEN_SRC="${PROJECT_DIR}/scripts/arch2ram-theme-gen"
+
+# Sprint 1: universal hotkeys (triggerhappy + helpers)
+TH_RUN_SRC="${PROJECT_DIR}/scripts/arch2ram-th-run"
+TH_MOUSE_SRC="${PROJECT_DIR}/scripts/arch2ram-mouse"
+TH_SHOT_SRC="${PROJECT_DIR}/scripts/arch2ram-screenshot"
+TH_HELP_SRC="${PROJECT_DIR}/scripts/arch2ram-help"
+TH_BRIGHT_SRC="${PROJECT_DIR}/scripts/arch2ram-brightness"
+TH_KILLFG_SRC="${PROJECT_DIR}/scripts/arch2ram-kill-foreground"
+TH_CONF_SRC="${PROJECT_DIR}/triggerhappy/arch2ram.conf"
+TH_OVERRIDE_SRC="${PROJECT_DIR}/systemd/triggerhappy.service.d/override.conf"
+
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -68,6 +79,17 @@ ES_MUSIC_DST="/usr/local/bin/arch2ram-music"
 ES_DISCOVER_ALL_DST="/usr/local/bin/arch2ram-discover-all"
 ES_NEWS_DST="/usr/local/bin/arch2ram-news"
 ES_THEME_GEN_DST="/usr/local/bin/arch2ram-theme-gen"
+
+# Sprint 1 destinations
+TH_RUN_DST="/usr/local/bin/arch2ram-th-run"
+TH_MOUSE_DST="/usr/local/bin/arch2ram-mouse"
+TH_SHOT_DST="/usr/local/bin/arch2ram-screenshot"
+TH_HELP_DST="/usr/local/bin/arch2ram-help"
+TH_BRIGHT_DST="/usr/local/bin/arch2ram-brightness"
+TH_KILLFG_DST="/usr/local/bin/arch2ram-kill-foreground"
+TH_CONF_DST="/etc/triggerhappy/triggers.d/arch2ram.conf"
+TH_OVERRIDE_DST="/etc/systemd/system/triggerhappy.service.d/override.conf"
+
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
 HYPRLAND_UNIT_DST="/etc/systemd/system/arch2ram-hyprland.service"
@@ -142,6 +164,12 @@ echo "[1/6] Checking dependencies..."
 NEED=()
 pacman -Q mkinitcpio-archiso &>/dev/null || NEED+=(mkinitcpio-archiso)
 pacman -Q squashfs-tools     &>/dev/null || NEED+=(squashfs-tools)
+# Sprint 1 deps — universal hotkeys via triggerhappy + on-screen feedback
+pacman -Q triggerhappy       &>/dev/null || NEED+=(triggerhappy)
+pacman -Q xosd               &>/dev/null || NEED+=(xosd)
+pacman -Q unclutter          &>/dev/null || NEED+=(unclutter)
+pacman -Q xdotool            &>/dev/null || NEED+=(xdotool)
+pacman -Q yad                &>/dev/null || NEED+=(yad)
 if (( WANT_GAMESCOPE )); then
     pacman -Q gamescope      &>/dev/null || NEED+=(gamescope)
     pacman -Q steam          &>/dev/null || NEED+=(steam)
@@ -219,6 +247,21 @@ install -Dm644 "$DRM_FIXUP_UNIT_SRC"   "$DRM_FIXUP_UNIT_DST"
 install -Dm755 "$DRM_ENVGEN_SRC"       "$DRM_ENVGEN_DST"
 systemctl enable arch2ram-drm-fixup.service >/dev/null 2>&1 || true
 echo "      drm-fixup: script + service + env generator"
+
+# Universal hotkeys (Sprint 1): triggerhappy + dispatcher + helpers.
+# These work across every boot mode (gamescope/ES/cage/hyprland/tty)
+# because triggerhappy reads /dev/input/event* at the kernel layer.
+install -Dm755 "$TH_RUN_SRC"      "$TH_RUN_DST"
+install -Dm755 "$TH_MOUSE_SRC"    "$TH_MOUSE_DST"
+install -Dm755 "$TH_SHOT_SRC"     "$TH_SHOT_DST"
+install -Dm755 "$TH_HELP_SRC"     "$TH_HELP_DST"
+install -Dm755 "$TH_BRIGHT_SRC"   "$TH_BRIGHT_DST"
+install -Dm755 "$TH_KILLFG_SRC"   "$TH_KILLFG_DST"
+install -Dm644 "$TH_CONF_SRC"     "$TH_CONF_DST"
+install -Dm644 "$TH_OVERRIDE_SRC" "$TH_OVERRIDE_DST"
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl enable triggerhappy.service >/dev/null 2>&1 || true
+echo "      hotkeys: triggerhappy + dispatcher + 6 helper scripts"
 
 # Kiosk (cage)
 if (( WANT_KIOSK )); then

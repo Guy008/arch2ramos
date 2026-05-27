@@ -1,0 +1,83 @@
+#!/bin/bash
+# arch2ram-help — show the universal hotkey reference.
+#
+# Opens a konsole window with the full hotkey list. If no display, dumps to
+# stdout. If konsole is missing, falls back to whatever terminal is around.
+
+set -e
+
+show_help() {
+    cat <<'EOF'
+
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                       arch2ramos — universal hotkeys
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  These hotkeys work in EVERY boot mode (gamescope, ES, cage, hyprland,
+  even raw TTY). They are handled by triggerhappy at the kernel/evdev
+  layer — no window manager required.
+
+  ── help / navigation ────────────────────────────────────────────
+    Win + F2          this help screen
+    Win + F1          open home folder in nemo
+    Win + E           same as Win+F1
+    Win + ESC         kill foreground app, return to launcher (ES)
+
+  ── tools ────────────────────────────────────────────────────────
+    Win + F3          toggle mouse cursor visibility
+    Win + F4 / Win+T  open konsole (terminal)
+    Win + B           open browser (Chrome)
+
+  ── screenshots ──────────────────────────────────────────────────
+    Win + F12         save screenshot to ~/Screenshots/
+    PrintScreen       same as Win+F12
+
+  ── volume ───────────────────────────────────────────────────────
+    XF86AudioRaiseVolume  +2%        (dedicated keyboard key)
+    XF86AudioLowerVolume  -2%        (dedicated keyboard key)
+    XF86AudioMute         toggle     (dedicated keyboard key)
+    Win + Up              +5%        (fallback)
+    Win + Down            -5%        (fallback)
+    Win + M               toggle     (fallback)
+
+  ── brightness (laptops) ─────────────────────────────────────────
+    XF86MonBrightnessUp    +5%
+    XF86MonBrightnessDown  -5%
+
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Press any key to close.
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EOF
+}
+
+# pick a terminal
+if [[ -n "$DISPLAY" || -n "$WAYLAND_DISPLAY" ]]; then
+    TERM_BIN=""
+    for t in konsole xterm alacritty kitty foot xfce4-terminal gnome-terminal; do
+        if command -v "$t" >/dev/null 2>&1; then TERM_BIN="$t"; break; fi
+    done
+
+    if [[ -n "$TERM_BIN" ]]; then
+        TMP=$(mktemp /tmp/arch2ram-help.XXXXXX.sh)
+        cat > "$TMP" <<EOF
+#!/bin/bash
+$(declare -f show_help)
+show_help
+read -n 1 -s -r
+rm -f "$TMP"
+EOF
+        chmod +x "$TMP"
+        case "$TERM_BIN" in
+            konsole)  exec konsole --hold -e bash "$TMP" ;;
+            xterm)    exec xterm -fa Monospace -fs 11 -e bash "$TMP" ;;
+            alacritty) exec alacritty -e bash "$TMP" ;;
+            kitty)    exec kitty bash "$TMP" ;;
+            foot)     exec foot bash "$TMP" ;;
+            *)        exec "$TERM_BIN" -e bash "$TMP" ;;
+        esac
+    fi
+fi
+
+# fallback: just print
+show_help

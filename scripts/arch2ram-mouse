@@ -1,0 +1,71 @@
+#!/bin/bash
+# arch2ram-mouse — show/hide/invert mouse cursor across the system.
+#
+# Inspired by Batocera.PLUS's mouse-pointer script. Uses unclutter under
+# X11 and xdotool to move the pointer off-screen as a final fallback.
+# State is tracked via /tmp/arch2ram-mouse.state.
+#
+# Usage:  arch2ram-mouse {on|off|invert|status}
+#
+# Behavior:
+#   on      → kill unclutter, ensure cursor visible
+#   off     → start unclutter -idle 0 (hide instantly)
+#   invert  → toggle between on and off
+#   status  → print "on" or "off" + exit 0/1
+
+set -e
+
+STATE_FILE="/tmp/arch2ram-mouse.state"
+ACTION="${1:-status}"
+
+current_state() {
+    [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" || echo "on"
+}
+
+set_state() {
+    echo "$1" > "$STATE_FILE"
+}
+
+mouse_off() {
+    pkill -x unclutter 2>/dev/null || true
+    sleep 0.05
+    if [[ -n "$DISPLAY" ]]; then
+        nohup unclutter -idle 0 -root -display "$DISPLAY" >/dev/null 2>&1 &
+        disown
+    else
+        nohup unclutter -idle 0 -root >/dev/null 2>&1 &
+        disown
+    fi
+    set_state off
+}
+
+mouse_on() {
+    pkill -x unclutter 2>/dev/null || true
+    # Nudge cursor to wake it (X11)
+    if command -v xdotool >/dev/null && [[ -n "$DISPLAY" ]]; then
+        xdotool mousemove_relative -- 1 1 2>/dev/null || true
+        xdotool mousemove_relative -- -1 -1 2>/dev/null || true
+    fi
+    set_state on
+}
+
+case "$ACTION" in
+    on)     mouse_on ;;
+    off)    mouse_off ;;
+    invert|toggle)
+        if [[ "$(current_state)" == "off" ]]; then
+            mouse_on
+        else
+            mouse_off
+        fi
+        ;;
+    status)
+        s=$(current_state)
+        echo "$s"
+        [[ "$s" == "on" ]]
+        ;;
+    *)
+        echo "usage: arch2ram-mouse {on|off|invert|status}" >&2
+        exit 64
+        ;;
+esac

@@ -1,0 +1,68 @@
+#!/bin/bash
+# arch2ram-kill-foreground — emergency exit from current app, back to launcher.
+#
+# Used by Win+ESC. Strategy:
+#   1. If gamescope/cage is the parent compositor and a child app is the
+#      focused window, kill the focused window's process.
+#   2. Otherwise, find the most-recently-launched process via the
+#      arch2ram-launch log and SIGTERM it.
+#   3. Final fallback: print to OSD that nothing was killed (so the user
+#      knows the key combo registered).
+#
+# Will NEVER kill the launcher itself (gamescope, ES, hyprland, cage).
+
+set -e
+
+PROTECT_RX='gamescope|hyprland|cage|emulationstation|sway|Xorg|Xwayland'
+
+target_pid=""
+
+# Strategy 1: focused window under X11
+if [[ -n "$DISPLAY" ]] && command -v xdotool >/dev/null 2>&1; then
+    wid=$(xdotool getactivewindow 2>/dev/null || true)
+    if [[ -n "$wid" ]]; then
+        pid=$(xdotool getwindowpid "$wid" 2>/dev/null || true)
+        if [[ -n "$pid" ]]; then
+            cmd=$(ps -o comm= -p "$pid" 2>/dev/null || true)
+            if [[ -n "$cmd" && ! "$cmd" =~ $PROTECT_RX ]]; then
+                target_pid="$pid"
+            fi
+        fi
+    fi
+fi
+
+# Strategy 2: last entry in ~/.arch2ram-recent.log
+if [[ -z "$target_pid" ]]; then
+    LOG="${HOME:-/home/Guy008}/.arch2ram-recent.log"
+    if [[ -f "$LOG" ]]; then
+        last_cmd=$(tac "$LOG" | awk -F'|' 'NF>=2 {print $2; exit}' | xargs -I{} basename {} 2>/dev/null || true)
+        if [[ -n "$last_cmd" ]]; then
+            pid=$(pgrep -n -x "$last_cmd" 2>/dev/null || pgrep -n -f "$last_cmd" 2>/dev/null || true)
+            if [[ -n "$pid" ]]; then
+                cmd=$(ps -o comm= -p "$pid" 2>/dev/null || true)
+                if [[ -n "$cmd" && ! "$cmd" =~ $PROTECT_RX ]]; then
+                    target_pid="$pid"
+                fi
+            fi
+        fi
+    fi
+fi
+
+osd() {
+    if command -v osd_cat >/dev/null 2>&1 && [[ -n "$DISPLAY" ]]; then
+        echo "$1" | osd_cat --pos=top --align=center --color=red \
+            --font='-*-helvetica-bold-r-*-*-20-*-*-*-*-*-*-*' \
+            --delay=2 --offset=40 >/dev/null 2>&1 &
+        disown
+    fi
+}
+
+if [[ -n "$target_pid" ]]; then
+    cmd=$(ps -o comm= -p "$target_pid" 2>/dev/null || echo "pid $target_pid")
+    osd "✖ killed $cmd"
+    kill -TERM "$target_pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$target_pid" 2>/dev/null || true
+else
+    osd "nothing to kill"
+fi

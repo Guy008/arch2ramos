@@ -1,0 +1,55 @@
+#!/bin/bash
+# arch2ram-screenshot — capture the current screen.
+#
+# Strategy (in order):
+#   1. grim (Wayland-native, fastest)
+#   2. import -window root (ImageMagick, X11)
+#   3. scrot (X11 fallback)
+#
+# Notifies via osd_cat if available, falls back to a 2-line stderr message.
+# Saves to ~/Screenshots/arch2ram-YYYY-MM-DD_HH-MM-SS.png.
+
+set -e
+
+USER_HOME="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+DEST_DIR="$USER_HOME/Screenshots"
+mkdir -p "$DEST_DIR"
+
+STAMP=$(date '+%Y-%m-%d_%H-%M-%S')
+DEST="$DEST_DIR/arch2ram-${STAMP}.png"
+
+notify() {
+    local msg="$1"
+    if command -v osd_cat >/dev/null 2>&1 && [[ -n "$DISPLAY" ]]; then
+        echo "$msg" | osd_cat --pos=top --align=center --color=lightgreen \
+            --font='-*-helvetica-bold-r-*-*-24-*-*-*-*-*-*-*' \
+            --shadow=2 --delay=2 --offset=40 >/dev/null 2>&1 &
+        disown
+    fi
+    echo "$msg" >&2
+}
+
+shot_grim() { grim "$DEST"; }
+shot_import() { import -window root "$DEST"; }
+shot_scrot() { scrot "$DEST"; }
+
+CAPTURED=0
+if [[ -n "$WAYLAND_DISPLAY" ]] && command -v grim >/dev/null 2>&1; then
+    if shot_grim 2>/dev/null; then CAPTURED=1; fi
+fi
+
+if [[ "$CAPTURED" == 0 ]] && command -v import >/dev/null 2>&1 && [[ -n "$DISPLAY" ]]; then
+    if shot_import 2>/dev/null; then CAPTURED=1; fi
+fi
+
+if [[ "$CAPTURED" == 0 ]] && command -v scrot >/dev/null 2>&1; then
+    if shot_scrot 2>/dev/null; then CAPTURED=1; fi
+fi
+
+if [[ "$CAPTURED" == 1 && -s "$DEST" ]]; then
+    notify "📸 saved → $(basename "$DEST")"
+    exit 0
+else
+    notify "📸 screenshot failed (no working backend)"
+    exit 1
+fi

@@ -1,0 +1,101 @@
+#!/bin/bash
+# arch2ram-th-run — Triggerhappy command dispatcher.
+#
+# triggerhappy runs as root with no display context. This wrapper:
+#   1. Finds the active graphical session via loginctl
+#   2. Extracts DISPLAY/WAYLAND_DISPLAY/XAUTHORITY/XDG_RUNTIME_DIR
+#   3. Drops to that user via runuser
+#   4. Execs the requested command
+#
+# Usage:  arch2ram-th-run COMMAND [args...]
+#
+# Falls back to user "Guy008" if no graphical session is detected (TTY case).
+
+set -e
+
+if [[ $# -lt 1 ]]; then
+    echo "usage: arch2ram-th-run COMMAND [args...]" >&2
+    exit 64
+fi
+
+# ── locate active graphical session ──────────────────────────────────────
+USER_NAME=""
+SESSION_ID=""
+
+while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^SESSIONS ]] && continue
+    read -r sid uid uname rest <<< "$line"
+    [[ -z "$sid" ]] && continue
+    # need an active, graphical session
+    sclass=$(loginctl show-session "$sid" --property=Class --value 2>/dev/null || true)
+    sstate=$(loginctl show-session "$sid" --property=State --value 2>/dev/null || true)
+    stype=$(loginctl show-session "$sid" --property=Type --value 2>/dev/null || true)
+    if [[ "$sclass" == "user" && "$sstate" == "active" && "$stype" != "tty" ]]; then
+        USER_NAME="$uname"
+        SESSION_ID="$sid"
+        break
+    fi
+done < <(loginctl --no-legend list-sessions 2>/dev/null)
+
+# fallback: pick any active user session
+if [[ -z "$USER_NAME" ]]; then
+    while IFS= read -r line; do
+        read -r sid uid uname rest <<< "$line"
+        sstate=$(loginctl show-session "$sid" --property=State --value 2>/dev/null || true)
+        if [[ "$sstate" == "active" && -n "$uname" && "$uname" != "root" ]]; then
+            USER_NAME="$uname"
+            SESSION_ID="$sid"
+            break
+        fi
+    done < <(loginctl --no-legend list-sessions 2>/dev/null)
+fi
+
+# final fallback: the default user
+[[ -z "$USER_NAME" ]] && USER_NAME="Guy008"
+
+# ── resolve home + uid ───────────────────────────────────────────────────
+USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
+USER_UID=$(id -u "$USER_NAME" 2>/dev/null || echo 1000)
+[[ -z "$USER_HOME" ]] && USER_HOME="/home/$USER_NAME"
+
+# ── build env ────────────────────────────────────────────────────────────
+XDG_RUNTIME_DIR="/run/user/$USER_UID"
+DISPLAY_VAL="${DISPLAY:-:0}"
+WAYLAND_DISPLAY_VAL=""
+
+# detect wayland socket
+if [[ -S "$XDG_RUNTIME_DIR/wayland-0" ]]; then
+    WAYLAND_DISPLAY_VAL="wayland-0"
+elif [[ -S "$XDG_RUNTIME_DIR/wayland-1" ]]; then
+    WAYLAND_DISPLAY_VAL="wayland-1"
+fi
+
+# X authority
+XAUTH=""
+if [[ -f "$USER_HOME/.Xauthority" ]]; then
+    XAUTH="$USER_HOME/.Xauthority"
+elif [[ -f "$XDG_RUNTIME_DIR/xauth_"* ]]; then
+    XAUTH=$(ls "$XDG_RUNTIME_DIR"/xauth_* 2>/dev/null | head -1)
+fi
+
+# DBus
+DBUS_ADDR="unix:path=$XDG_RUNTIME_DIR/bus"
+
+# ── log (for debugging) ──────────────────────────────────────────────────
+LOG=/var/log/arch2ram-th.log
+{
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] user=$USER_NAME uid=$USER_UID cmd='$*'"
+} >> "$LOG" 2>/dev/null || true
+
+# ── exec ────────────────────────────────────────────────────────────────
+exec runuser -u "$USER_NAME" -- env \
+    HOME="$USER_HOME" \
+    USER="$USER_NAME" \
+    LOGNAME="$USER_NAME" \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    DISPLAY="$DISPLAY_VAL" \
+    ${WAYLAND_DISPLAY_VAL:+WAYLAND_DISPLAY="$WAYLAND_DISPLAY_VAL"} \
+    ${XAUTH:+XAUTHORITY="$XAUTH"} \
+    DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDR" \
+    PATH="/usr/local/bin:/usr/bin:/bin" \
+    "$@"
