@@ -52,6 +52,10 @@ TH_KILLFG_SRC="${PROJECT_DIR}/scripts/arch2ram-kill-foreground"
 TH_CONF_SRC="${PROJECT_DIR}/triggerhappy/arch2ram.conf"
 TH_OVERRIDE_SRC="${PROJECT_DIR}/systemd/triggerhappy.service.d/override.conf"
 
+# Sprint 2: kiosk lockdown
+DALTFN_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-disablealtfn"
+DALTFN_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-disablealtfn.service"
+
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -89,6 +93,10 @@ TH_BRIGHT_DST="/usr/local/bin/arch2ram-brightness"
 TH_KILLFG_DST="/usr/local/bin/arch2ram-kill-foreground"
 TH_CONF_DST="/etc/triggerhappy/triggers.d/arch2ram.conf"
 TH_OVERRIDE_DST="/etc/systemd/system/triggerhappy.service.d/override.conf"
+
+# Sprint 2 destinations
+DALTFN_SCRIPT_DST="/usr/local/bin/arch2ram-disablealtfn"
+DALTFN_UNIT_DST="/etc/systemd/system/arch2ram-disablealtfn.service"
 
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
@@ -262,6 +270,14 @@ install -Dm644 "$TH_OVERRIDE_SRC" "$TH_OVERRIDE_DST"
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl enable triggerhappy.service >/dev/null 2>&1 || true
 echo "      hotkeys: triggerhappy + dispatcher + 6 helper scripts"
+
+# Kiosk lockdown (Sprint 2): block Ctrl+Alt+F1..F12 TTY switching.
+# The script self-disables when not in RAM mode, so installing the unit
+# globally is safe -- it'll only do work on RAM boots.
+install -Dm755 "$DALTFN_SCRIPT_SRC" "$DALTFN_SCRIPT_DST"
+install -Dm644 "$DALTFN_UNIT_SRC"   "$DALTFN_UNIT_DST"
+systemctl enable arch2ram-disablealtfn.service >/dev/null 2>&1 || true
+echo "      kiosk-lockdown: arch2ram-disablealtfn (RAM-mode only)"
 
 # Kiosk (cage)
 if (( WANT_KIOSK )); then

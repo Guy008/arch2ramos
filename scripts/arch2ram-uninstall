@@ -40,7 +40,7 @@ echo ""
 echo "[1/6] Disabling + removing systemd services..."
 for svc in arch2ram-drm-fixup.service arch2ram-kiosk.service arch2ram-hyprland.service \
            arch2ram-gamescope.service arch2ram-emulationstation.service \
-           arch2ram-boot-mode.service; do
+           arch2ram-boot-mode.service arch2ram-disablealtfn.service; do
     systemctl disable "$svc" >/dev/null 2>&1 || true
     rm -vf "/etc/systemd/system/$svc"
 done
@@ -64,6 +64,8 @@ rm -vf /usr/local/bin/arch2ram-help
 rm -vf /usr/local/bin/arch2ram-brightness
 rm -vf /usr/local/bin/arch2ram-kill-foreground
 rm -vf /etc/triggerhappy/triggers.d/arch2ram.conf
+# Sprint 2 helpers
+rm -vf /usr/local/bin/arch2ram-disablealtfn
 rm -vf /etc/systemd/user-environment-generators/10-arch2ram-drm
 rm -vf /usr/share/konsole/arch2ram-kiosk.profile
 

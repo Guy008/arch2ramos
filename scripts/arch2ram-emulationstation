@@ -1,12 +1,27 @@
 #!/bin/bash
-# arch2ramos: gamescope + EmulationStation kiosk launcher.
+# arch2ramos: gamescope + EmulationStation production-grade launcher.
 #
-# Boot flow: gamescope owns DRM, ES runs inside it. When the user picks
-# an entry in ES, the configured <command> runs (typically
-# /home/Guy008/Scripts/runer.sh %ROM%). The launched app appears as
-# the active window in gamescope; exiting it returns to ES.
+# Boot flow: gamescope owns DRM, ES runs inside it. The user picks an entry,
+# /usr/local/bin/arch2ram-launch fires, the target binary takes over the
+# gamescope canvas, returns to ES on exit.
+#
+# This wrapper is more than "exec ES" -- it runs an exit-loop that honors
+# trigger files left by ES Actions:
+#
+#   /tmp/arch2ram.shutdown      -> poweroff
+#   /tmp/arch2ram.reboot        -> reboot
+#   /tmp/arch2ram.restart-es    -> relaunch ES (read config changes, etc.)
+#   /tmp/arch2ram.switch-mode=X -> systemctl start arch2ram-X.service, exit
+#                                  (X = gamescope, hyprland, kiosk)
+#   anything else / ES exited cleanly -> drop to a recovery konsole so
+#                                        the user isn't left at a black
+#                                        screen.
+#
+# This is the same pattern Batocera's emulationstation-standalone uses.
 
-set -e
+set -u   # not -e; we WANT to keep going if ES segfaults
+
+# -------- pre-launch: env + display readiness ---------------------------------
 
 # Wait for DRM devices (drm-fixup runs before us)
 for _ in 1 2 3 4 5; do
@@ -34,7 +49,7 @@ export LC_CTYPE=he_IL.UTF-8
 # MangoHud globally
 export MANGOHUD=1
 
-# Output res — same overrides as gamescope mode
+# Output res -- same overrides as gamescope mode
 WIDTH=3840
 HEIGHT=2160
 RATE=60
@@ -45,14 +60,119 @@ if [[ -r /proc/cmdline ]]; then
     [[ -n "$rate" ]] && RATE="$rate"
 fi
 
-echo "arch2ram-emulationstation: gamescope ${WIDTH}x${HEIGHT}@${RATE} -> emulationstation"
+# -------- trigger-file helpers ------------------------------------------------
 
-# Drop ambient caps so bwrap (used by Steam runtime, glycin, Firefox) works.
-exec setpriv --ambient-caps '-all' \
-    gamescope \
-        -W "$WIDTH" -H "$HEIGHT" -r "$RATE" \
-        -f \
-        --force-grab-cursor \
-        --adaptive-sync \
-        -- \
-        emulationstation --no-splash
+clear_triggers() {
+    rm -f /tmp/arch2ram.shutdown \
+          /tmp/arch2ram.reboot \
+          /tmp/arch2ram.restart-es \
+          /tmp/arch2ram.switch-mode* 2>/dev/null
+}
+
+handle_triggers() {
+    if [[ -f /tmp/arch2ram.shutdown ]]; then
+        rm -f /tmp/arch2ram.shutdown
+        echo "arch2ram-emulationstation: shutdown trigger"
+        systemctl poweroff
+        exit 0
+    fi
+    if [[ -f /tmp/arch2ram.reboot ]]; then
+        rm -f /tmp/arch2ram.reboot
+        echo "arch2ram-emulationstation: reboot trigger"
+        systemctl reboot
+        exit 0
+    fi
+    for mode_flag in /tmp/arch2ram.switch-mode-*; do
+        [[ -e "$mode_flag" ]] || continue
+        mode="${mode_flag##*switch-mode-}"
+        rm -f "$mode_flag"
+        echo "arch2ram-emulationstation: switching to mode '$mode'"
+        case "$mode" in
+            gamescope|hyprland|kiosk)
+                systemctl start "arch2ram-${mode}.service" &
+                exit 0
+                ;;
+            *)
+                echo "  unknown mode: $mode"
+                ;;
+        esac
+    done
+    # Otherwise: signal "loop" or "fall through to recovery" by reading exit code
+}
+
+recovery_shell() {
+    # Last-resort: drop into a terminal inside gamescope so the screen isn't
+    # black. Useful if ES crashes early or its config is broken.
+    echo ""
+    echo "  ==============================================================="
+    echo "  ES exited unexpectedly. Dropping to recovery shell."
+    echo "  Run 'emulationstation' to retry, or 'systemctl reboot' to reset."
+    echo "  ==============================================================="
+    echo ""
+    if command -v konsole >/dev/null; then
+        exec setpriv --ambient-caps '-all' \
+            gamescope -W "$WIDTH" -H "$HEIGHT" -r "$RATE" -f \
+                --force-grab-cursor -- konsole --hold
+    else
+        exec bash -l
+    fi
+}
+
+# -------- main loop -----------------------------------------------------------
+
+clear_triggers   # ignore stale flags from previous boot
+
+LOOP_GUARD=0
+MAX_RAPID_RESTARTS=5
+
+while true; do
+    LAST_START=$(date +%s)
+
+    echo "arch2ram-emulationstation: gamescope ${WIDTH}x${HEIGHT}@${RATE} -> emulationstation"
+
+    # Drop ambient caps so bwrap (Steam runtime, glycin, Firefox) works inside.
+    setpriv --ambient-caps '-all' \
+        gamescope \
+            -W "$WIDTH" -H "$HEIGHT" -r "$RATE" \
+            -f \
+            --force-grab-cursor \
+            --adaptive-sync \
+            -- \
+            emulationstation --no-splash
+    ES_EXIT=$?
+
+    echo "arch2ram-emulationstation: ES exited with code $ES_EXIT"
+
+    # Check trigger files first -- they take priority over exit code
+    handle_triggers
+
+    if [[ -f /tmp/arch2ram.restart-es ]]; then
+        rm -f /tmp/arch2ram.restart-es
+        echo "arch2ram-emulationstation: restart trigger -- relaunching"
+        continue
+    fi
+
+    # Rapid-restart guard: if ES crashes 5 times in 60 seconds, give up.
+    NOW=$(date +%s)
+    if (( NOW - LAST_START < 12 )); then
+        ((LOOP_GUARD++))
+    else
+        LOOP_GUARD=0
+    fi
+    if (( LOOP_GUARD >= MAX_RAPID_RESTARTS )); then
+        echo "arch2ram-emulationstation: too many crashes -- recovery shell"
+        recovery_shell
+    fi
+
+    # ES exited cleanly without a trigger: relaunch (the user probably hit a
+    # menu that quit ES; we shouldn't leave them at a black screen).
+    if (( ES_EXIT == 0 )); then
+        echo "arch2ram-emulationstation: clean exit, relaunching"
+        sleep 1
+        continue
+    fi
+
+    # ES crashed without a trigger and without rapid-restart: try once more
+    echo "arch2ram-emulationstation: crash, retrying in 2s"
+    sleep 2
+done

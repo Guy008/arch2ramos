@@ -1,0 +1,14 @@
+[Unit]
+Description=arch2ramos: lock down TTY switching (kiosk protection)
+Documentation=man:loadkeys(1)
+DefaultDependencies=no
+After=systemd-vconsole-setup.service
+Before=getty.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/arch2ram-disablealtfn
+
+[Install]
+WantedBy=multi-user.target

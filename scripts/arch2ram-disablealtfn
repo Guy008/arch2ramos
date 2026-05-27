@@ -1,0 +1,56 @@
+#!/bin/bash
+# arch2ram-disablealtfn -- disable Ctrl+Alt+F1..F12 TTY switching.
+#
+# Without this, anyone at the keyboard can hit Ctrl+Alt+F2 and land on a
+# raw root TTY -- bypassing every kiosk/launcher protection.
+#
+# This is the Batocera S33disablealtfn pattern: dumpkeys -> filter out
+# every Console_* binding -> loadkeys.
+#
+# SAFETY: only runs when /proc/cmdline contains "copytoram=y" (i.e. RAM
+# mode). On the disk-mode boot we MUST keep TTY switching available --
+# otherwise a broken arch2ramos update would lock the user out.
+#
+# To reverse manually: loadkeys -d  (restore kernel defaults)
+
+set -e
+
+# Guard 1: only run in RAM mode
+if ! grep -q 'copytoram=y' /proc/cmdline 2>/dev/null; then
+    echo "arch2ram-disablealtfn: not in RAM mode -- skipping"
+    exit 0
+fi
+
+# Guard 2: skip if debug mode requested
+if grep -qE 'arch2ram\.mode=(debug|recovery)' /proc/cmdline 2>/dev/null; then
+    echo "arch2ram-disablealtfn: debug/recovery mode -- skipping"
+    exit 0
+fi
+
+# Guard 3: skip if explicit override
+if grep -q 'arch2ram\.altfn=enable' /proc/cmdline 2>/dev/null; then
+    echo "arch2ram-disablealtfn: arch2ram.altfn=enable on cmdline -- skipping"
+    exit 0
+fi
+
+# Need loadkeys (kbd package)
+if ! command -v dumpkeys >/dev/null || ! command -v loadkeys >/dev/null; then
+    echo "arch2ram-disablealtfn: kbd tools missing -- skipping"
+    exit 0
+fi
+
+echo "arch2ram-disablealtfn: stripping Console_* bindings from keymap"
+
+# dumpkeys to memory, drop everything that triggers Console_<N>, reload.
+# Both alt and ctrl+alt forms.
+TMPFILE=$(mktemp /tmp/arch2ram-keymap.XXXXXX)
+trap 'rm -f "$TMPFILE"' EXIT
+
+dumpkeys \
+    | grep -vE 'alt[[:space:]]+keycode[[:space:]]+[0-9]+[[:space:]]*=[[:space:]]*Console_' \
+    | grep -vE 'alt_ctrl[[:space:]]+keycode[[:space:]]+[0-9]+[[:space:]]*=[[:space:]]*Console_' \
+    | grep -vE 'shift_alt[[:space:]]+keycode[[:space:]]+[0-9]+[[:space:]]*=[[:space:]]*Console_' \
+    > "$TMPFILE"
+
+loadkeys --quiet "$TMPFILE"
+echo "arch2ram-disablealtfn: done"
