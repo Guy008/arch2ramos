@@ -103,6 +103,13 @@ game.wine.dll-overrides=
 # Custom WINEPREFIX path; empty = wine default
 game.wine.prefix=
 
+# Wine virtual desktop: when ES runs inside a 4K gamescope canvas, a Wine
+# game that opens at e.g. 1920x1080 will sit in the top-left quarter only.
+# Force-wrap wine apps in `wine explorer /desktop=arch2ram,WxH` so the
+# whole canvas is used. Set "no" to disable for individual flaky games.
+game.wine.vd=yes
+game.wine.vd.size=3840x2160
+
 # --- DXVK / VKD3D ---
 # Values: off | fps | "fps,gpuload,memory" | full
 game.dxvk.hud=off

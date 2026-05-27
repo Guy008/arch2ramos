@@ -105,11 +105,27 @@ handle_exit_triggers() {
 
 run_hyprland() {
     echo "arch2ram-emulationstation: running Hyprland as a sibling compositor"
-    # Hyprland takes the DRM directly -- gamescope is NOT in the picture here.
-    # Config: /etc/arch2ram/hyprland-ram.conf (same one arch2ram-hyprland uses).
-    XDG_CURRENT_DESKTOP=Hyprland \
+    # Critical: wait for gamescope to fully release the DRM device, AND wipe
+    # the WAYLAND_DISPLAY / DISPLAY env vars that Hyprland inherits from the
+    # gamescope session -- otherwise Hyprland tries to nest inside the dead
+    # gamescope socket and crashes silently in under a second (presenting
+    # the user with a brief black flash and instant ES relaunch).
+    sleep 2
+    # Persistent log -- /tmp is volatile under tmpfs RAM mode, /home is not.
+    LOG="${HOME:-/home/Guy008}/.arch2ram-launcher.log"
+    {
+        echo "[$(date '+%H:%M:%S')] launching Hyprland"
+        echo "  binary: $(which hyprland)"
+        echo "  config: /etc/arch2ram/hyprland-ram.conf"
+    } >> "$LOG" 2>&1
+    env -u WAYLAND_DISPLAY -u DISPLAY -u GAMESCOPE_WAYLAND_DISPLAY -u XAUTHORITY \
+        XDG_RUNTIME_DIR="/run/user/$(id -u)" \
+        XDG_CURRENT_DESKTOP=Hyprland \
+        XDG_SESSION_TYPE=wayland \
         setpriv --ambient-caps '-all' \
-            hyprland --config /etc/arch2ram/hyprland-ram.conf
+            hyprland --config /etc/arch2ram/hyprland-ram.conf \
+        >> "$LOG" 2>&1
+    echo "[$(date '+%H:%M:%S')] Hyprland exited code $?" >> "$LOG"
 }
 
 run_steam_bpm() {

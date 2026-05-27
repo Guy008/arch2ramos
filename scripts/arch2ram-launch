@@ -63,11 +63,24 @@ case "$SYSTEM" in
         ;;
 
     # ─── Windows games via wine (or pre-wrapped .sh that already calls wine) ──
+    # When ES runs inside a 4K gamescope canvas, a wine app that opens a
+    # 1920x1080 window appears in the top-left quarter only. Fix: force
+    # wine to render in a virtual desktop matching gamescope's canvas, so
+    # the app fills the screen. The virtual desktop size is read from
+    # arch2ram-settings: game.wine.vd.size (default "3840x2160"). Set
+    # game.wine.vd=no to disable the virtual desktop and use whatever
+    # resolution the app picks.
     windows)
         if [[ "$ROM" == *.sh ]]; then
             exec "$RUNER" "$ROM"
         else
-            exec "$RUNER" wine "$ROM"
+            wine_vd="$(arch2ram-settings get game.wine.vd yes 2>/dev/null || echo yes)"
+            wine_vd_size="$(arch2ram-settings get game.wine.vd.size 3840x2160 2>/dev/null || echo 3840x2160)"
+            if [[ "$wine_vd" == "yes" ]]; then
+                exec "$RUNER" wine explorer "/desktop=arch2ram,$wine_vd_size" "$ROM"
+            else
+                exec "$RUNER" wine "$ROM"
+            fi
         fi
         ;;
 
