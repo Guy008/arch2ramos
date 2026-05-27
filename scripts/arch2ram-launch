@@ -138,6 +138,14 @@ case "$SYSTEM" in
         exec /bin/bash "$ROM"
         ;;
 
+    # ─── Desktop mode — Hyprland/KDE/Sway/etc. as top-level ES system ─────────
+    # Each .sh writes a run-* flag to /tmp and kills ES. The
+    # arch2ram-emulationstation wrapper exit-loop picks it up and runs the
+    # compositor inline. When you exit the compositor, ES comes back.
+    desktop)
+        exec /bin/bash "$ROM"
+        ;;
+
     # ─── SSH — wrappers connect to a remote host in a konsole window ──────────
     ssh)
         exec /bin/bash "$ROM"

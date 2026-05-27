@@ -1,0 +1,86 @@
+#!/bin/bash
+# arch2ram-bluetooth-autoconnect -- on boot, try to connect to every device
+# already paired AND marked "Trusted: yes" in bluetoothctl.
+#
+# This is what lets the user pair a PS4 controller ONCE (via the Bluetooth
+# category in ES, or blueman-manager) and have it auto-connect on every
+# subsequent boot -- without needing the keyboard to confirm.
+#
+# Pattern borrowed from Batocera's startup-bluetooth handling.
+
+set -u
+
+TIMEOUT=45
+LOG=/var/log/arch2ram-bluetooth-autoconnect.log
+
+log() {
+    echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"
+}
+
+log "starting"
+
+# Need bluetoothctl
+if ! command -v bluetoothctl >/dev/null; then
+    log "bluetoothctl missing -- nothing to do"
+    exit 0
+fi
+
+# Wait for the controller to be ready
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if bluetoothctl show 2>/dev/null | grep -q "Powered:"; then
+        break
+    fi
+    sleep 1
+done
+
+# Power on
+bluetoothctl power on 2>/dev/null
+sleep 1
+
+# Pull all paired devices
+mapfile -t macs < <(bluetoothctl devices Paired 2>/dev/null | awk '/^Device / {print $2}')
+
+if (( ${#macs[@]} == 0 )); then
+    log "no paired devices -- exit"
+    exit 0
+fi
+
+log "paired devices found: ${macs[*]}"
+
+# Connect loop: keep trying until everything's connected OR timeout.
+START=$(date +%s)
+declare -A connected
+
+while (( $(date +%s) - START < TIMEOUT )); do
+    pending=0
+    for mac in "${macs[@]}"; do
+        [[ "${connected[$mac]:-}" == "yes" ]] && continue
+
+        info=$(bluetoothctl info "$mac" 2>/dev/null)
+        # Skip if not trusted (user explicitly removed trust = don't auto-connect)
+        if ! grep -q "Trusted: yes" <<<"$info"; then
+            log "  $mac not trusted -- skip"
+            connected[$mac]=skip
+            continue
+        fi
+
+        if grep -q "Connected: yes" <<<"$info"; then
+            log "  $mac already connected"
+            connected[$mac]=yes
+            continue
+        fi
+
+        log "  trying to connect $mac"
+        if bluetoothctl connect "$mac" 2>&1 | grep -q "Connection successful"; then
+            log "    -> connected"
+            connected[$mac]=yes
+        else
+            log "    -> failed, will retry"
+            pending=1
+        fi
+    done
+    (( pending == 0 )) && break
+    sleep 3
+done
+
+log "done (elapsed $(( $(date +%s) - START ))s)"

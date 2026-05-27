@@ -62,6 +62,10 @@ PRIMGPU_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-pick-primary-gpu.service"
 SETTINGS_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-settings"
 SETTINGS_DEFAULTS_SRC="${PROJECT_DIR}/etc-arch2ram/settings.defaults"
 
+# Bluetooth auto-connect (post-Sprint 4 -- "controller before keyboard")
+BTAUTO_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-bluetooth-autoconnect"
+BTAUTO_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-bluetooth-autoconnect.service"
+
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -109,6 +113,10 @@ PRIMGPU_SCRIPT_DST="/usr/local/bin/arch2ram-pick-primary-gpu"
 PRIMGPU_UNIT_DST="/etc/systemd/system/arch2ram-pick-primary-gpu.service"
 SETTINGS_SCRIPT_DST="/usr/local/bin/arch2ram-settings"
 SETTINGS_DEFAULTS_DST="/etc/arch2ram/settings.defaults"
+
+# Bluetooth destinations
+BTAUTO_SCRIPT_DST="/usr/local/bin/arch2ram-bluetooth-autoconnect"
+BTAUTO_UNIT_DST="/etc/systemd/system/arch2ram-bluetooth-autoconnect.service"
 
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
@@ -303,6 +311,14 @@ install -Dm755 "$SETTINGS_SCRIPT_SRC"  "$SETTINGS_SCRIPT_DST"
 install -Dm644 "$SETTINGS_DEFAULTS_SRC" "$SETTINGS_DEFAULTS_DST"
 systemctl enable arch2ram-pick-primary-gpu.service >/dev/null 2>&1 || true
 echo "      services: pick-primary-gpu (multi-GPU select) + arch2ram-settings"
+
+# Bluetooth auto-connect: let already-paired+trusted controllers connect on
+# boot WITHOUT needing the keyboard to confirm anything in the UI.
+install -Dm755 "$BTAUTO_SCRIPT_SRC" "$BTAUTO_SCRIPT_DST"
+install -Dm644 "$BTAUTO_UNIT_SRC"   "$BTAUTO_UNIT_DST"
+systemctl enable arch2ram-bluetooth-autoconnect.service >/dev/null 2>&1 || true
+systemctl enable bluetooth.service >/dev/null 2>&1 || true
+echo "      bluetooth: arch2ram-bluetooth-autoconnect (trusted devices on boot)"
 
 # Kiosk (cage)
 if (( WANT_KIOSK )); then

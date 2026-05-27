@@ -1,0 +1,14 @@
+[Unit]
+Description=arch2ramos: auto-connect trusted Bluetooth devices on boot
+Documentation=man:bluetoothctl(1)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/bin/arch2ram-bluetooth-autoconnect
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

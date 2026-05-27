@@ -41,7 +41,7 @@ echo "[1/6] Disabling + removing systemd services..."
 for svc in arch2ram-drm-fixup.service arch2ram-kiosk.service arch2ram-hyprland.service \
            arch2ram-gamescope.service arch2ram-emulationstation.service \
            arch2ram-boot-mode.service arch2ram-disablealtfn.service \
-           arch2ram-pick-primary-gpu.service; do
+           arch2ram-pick-primary-gpu.service arch2ram-bluetooth-autoconnect.service; do
     systemctl disable "$svc" >/dev/null 2>&1 || true
     rm -vf "/etc/systemd/system/$svc"
 done
@@ -73,6 +73,8 @@ rm -vf /usr/local/bin/arch2ram-settings
 rm -vf /etc/arch2ram/settings.defaults
 rm -vf /etc/arch2ram/gpu.env
 rm -vf /etc/X11/xorg.conf.d/10-arch2ram-prime.conf
+# Bluetooth helpers
+rm -vf /usr/local/bin/arch2ram-bluetooth-autoconnect
 rm -vf /etc/systemd/user-environment-generators/10-arch2ram-drm
 rm -vf /usr/share/konsole/arch2ram-kiosk.profile
 
