@@ -136,6 +136,16 @@ case "$SYSTEM" in
         exec /bin/bash "$ROM"
         ;;
 
+    # ─── SSH — wrappers connect to a remote host in a konsole window ──────────
+    ssh)
+        exec /bin/bash "$ROM"
+        ;;
+
+    # ─── Network shares / Drives / Settings — all just bash wrappers ──────────
+    shares|drives|settings)
+        exec /bin/bash "$ROM"
+        ;;
+
     # ─── AI queries — .prompt files containing a prompt for an AI agent ──────
     # Format: first non-empty, non-comment line = prompt text.
     # The wrapper here is a stub — wire it up to an actual API later

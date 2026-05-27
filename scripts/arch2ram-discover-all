@@ -1,0 +1,94 @@
+#!/bin/bash
+# arch2ram-discover-all — run all the auto-discovery scripts in sequence.
+#
+# Idempotent. Safe to re-run anytime. Each individual scanner does its
+# own cleanup of OUR-generated files (symlinks, bm_*.url) but leaves
+# hand-added wrappers in place.
+#
+# Scanners called:
+#   arch2ram-es-discover  — apps (/usr/share/applications), linux/windows
+#                            games (/media/G/{Linux,Windows}/), Steam BPM
+#   arch2ram-bookmarks    — websites (Chrome + Firefox bookmarks → .url)
+#   arch2ram-music        — music (~/Music + /media/*/Music → symlinks)
+#
+# Plus regenerates the per-host SSH wrappers from ~/.ssh/config.
+
+set -e
+
+USER_NAME="${SUDO_USER:-$(whoami)}"
+USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+ES_ROOT="$USER_HOME/ES"
+
+# Drop privs if we're root (everything happens under the user's home).
+run_as_user() {
+    if [[ $EUID -eq 0 ]]; then
+        sudo -u "$USER_NAME" "$@"
+    else
+        "$@"
+    fi
+}
+
+echo "═══════════════════════════════════════════════════════"
+echo "  arch2ram-discover-all  →  populating $ES_ROOT"
+echo "═══════════════════════════════════════════════════════"
+echo ""
+
+# ── Apps + Linux + Windows + Steam ─────────────────────────────────────
+if command -v arch2ram-es-discover &>/dev/null; then
+    echo "[1/3] arch2ram-es-discover"
+    run_as_user arch2ram-es-discover
+else
+    echo "[1/3] SKIP — arch2ram-es-discover not installed"
+fi
+echo ""
+
+# ── Websites from browser bookmarks ────────────────────────────────────
+if command -v arch2ram-bookmarks &>/dev/null; then
+    echo "[2/3] arch2ram-bookmarks"
+    run_as_user arch2ram-bookmarks
+else
+    echo "[2/3] SKIP — arch2ram-bookmarks not installed"
+fi
+echo ""
+
+# ── Music from local + NFS dirs ────────────────────────────────────────
+if command -v arch2ram-music &>/dev/null; then
+    echo "[3/3] arch2ram-music"
+    run_as_user arch2ram-music --max-depth 3
+else
+    echo "[3/3] SKIP — arch2ram-music not installed"
+fi
+echo ""
+
+# ── SSH wrappers from ~/.ssh/config ────────────────────────────────────
+if [[ -r "$USER_HOME/.ssh/config" ]]; then
+    echo "[bonus] regenerating SSH wrappers"
+    mkdir -p "$ES_ROOT/ssh"
+    # Don't overwrite hand-added wrappers — only update ones named host.sh
+    while read -r host; do
+        if [[ -n "$host" && "$host" != "github.com" && "$host" != "*" ]]; then
+            wrapper="$ES_ROOT/ssh/${host}.sh"
+            cat > "$wrapper" <<EOF
+#!/bin/bash
+# Auto-generated from ~/.ssh/config
+exec konsole --hold -e ssh "$host"
+EOF
+            chmod +x "$wrapper"
+        fi
+    done < <(awk '/^[Hh]ost / {print $2}' "$USER_HOME/.ssh/config")
+    echo "  → $(ls "$ES_ROOT/ssh" 2>/dev/null | wc -l) SSH wrappers"
+fi
+echo ""
+
+echo "═══════════════════════════════════════════════════════"
+echo "  Final inventory"
+echo "═══════════════════════════════════════════════════════"
+for d in apps websites linux windows steam movies series livetv music photos actions queries ssh shares drives settings; do
+    if [[ -d "$ES_ROOT/$d" ]]; then
+        n=$(find "$ES_ROOT/$d" -maxdepth 1 \( -type f -o -type l \) 2>/dev/null | wc -l)
+        printf "  %-12s %5d entries\n" "$d" "$n"
+    fi
+done
+
+echo ""
+echo "Done. Re-launch EmulationStation to see the updates."

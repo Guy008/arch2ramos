@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""arch2ram-bookmarks — scrape Chrome/Firefox bookmarks into ES .url files.
+
+Reads the user's browser bookmarks and creates a .url file per bookmark in
+~/ES/websites/, so ES surfaces all your bookmarks as launchable entries.
+
+Supports:
+  - Google Chrome / Chromium / Brave / Vivaldi (JSON format)
+  - Firefox (places.sqlite)
+
+Output: ~/ES/websites/<sanitized-name>.url
+
+Idempotent: re-running cleans + re-populates only files prefixed `bm_`
+so manually-added .url files are kept.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import sys
+import tempfile
+from pathlib import Path
+from shutil import copyfile
+from urllib.parse import urlparse
+
+
+HOME = Path.home()
+ES_WEBSITES = HOME / "ES" / "websites"
+BM_PREFIX = "bm_"   # filename prefix so we can clean only OUR files on re-run
+
+
+def sanitize(name: str, max_len: int = 60) -> str:
+    """Safe-ify a name for use as a filename."""
+    name = name.strip()
+    # Remove dangerous filesystem chars
+    name = re.sub(r"[/\0\n\r\t]+", " ", name)
+    # Collapse whitespace
+    name = re.sub(r"\s+", " ", name)
+    if len(name) > max_len:
+        name = name[:max_len].rstrip()
+    return name
+
+
+def derive_name_from_url(url: str) -> str:
+    """If a bookmark has no name, derive one from its URL."""
+    try:
+        p = urlparse(url)
+        host = (p.hostname or "site").lower()
+        # Drop common subdomains
+        host = re.sub(r"^(www|m|en|he)\.", "", host)
+        # Use TLD-stripped part as base
+        base = host.split(".")[0]
+        if p.path and p.path != "/":
+            # Add path hint if useful
+            path_part = p.path.strip("/").replace("/", "-")[:20]
+            return f"{base.title()} {path_part}"
+        return base.title()
+    except Exception:
+        return "Bookmark"
+
+
+def write_url_file(name: str, url: str, count: int = 0) -> tuple[Path, str]:
+    """Write a .url file for a bookmark. Returns (path, status)."""
+    name = sanitize(name)
+    if not name:
+        name = derive_name_from_url(url)
+    if not name:
+        name = f"bookmark-{count}"
+
+    # Try filename; if exists (collision), append a numeric suffix.
+    base_name = name
+    fpath = ES_WEBSITES / f"{BM_PREFIX}{base_name}.url"
+    suffix = 0
+    while fpath.exists():
+        suffix += 1
+        fpath = ES_WEBSITES / f"{BM_PREFIX}{base_name} ({suffix}).url"
+
+    fpath.write_text(
+        f"# {name} — bookmarked URL (auto-generated, do not hand-edit; will be regenerated)\n"
+        f"{url}\n",
+        encoding="utf-8",
+    )
+    return fpath, "ok"
+
+
+# ── Chrome / Chromium / Brave / Vivaldi ────────────────────────────────────
+
+
+def find_chromium_profiles():
+    """Return [(browser_name, bookmarks_path), ...] for all known Chromium variants."""
+    candidates = [
+        ("Chrome",    HOME / ".config/google-chrome"),
+        ("Chromium",  HOME / ".config/chromium"),
+        ("Brave",     HOME / ".config/BraveSoftware/Brave-Browser"),
+        ("Vivaldi",   HOME / ".config/vivaldi"),
+    ]
+    results = []
+    for name, base in candidates:
+        if not base.exists():
+            continue
+        for profile_dir in base.iterdir():
+            if not profile_dir.is_dir():
+                continue
+            bm = profile_dir / "Bookmarks"
+            if bm.exists():
+                results.append((f"{name}/{profile_dir.name}", bm))
+    return results
+
+
+def walk_chromium_bookmarks(node, callback, parent_folders=None):
+    """Recursively walk a Chromium bookmarks JSON tree, call callback(name, url, folders)."""
+    if not isinstance(node, dict):
+        return
+    parent_folders = parent_folders or []
+    t = node.get("type")
+    n = node.get("name", "")
+    if t == "url":
+        url = node.get("url", "")
+        if url and not url.startswith(("javascript:", "chrome:", "chrome-extension:", "about:")):
+            callback(n, url, parent_folders)
+    elif t == "folder":
+        new_folders = parent_folders + ([n] if n else [])
+        for child in node.get("children", []):
+            walk_chromium_bookmarks(child, callback, new_folders)
+
+
+def scrape_chromium():
+    profiles = find_chromium_profiles()
+    if not profiles:
+        return 0
+
+    total = 0
+    for browser_id, bm_path in profiles:
+        try:
+            # Copy first — Chrome may lock the file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
+                copyfile(bm_path, tmp.name)
+                data = json.load(open(tmp.name, encoding="utf-8"))
+                os.unlink(tmp.name)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"  WARN: couldn't read {browser_id}: {e}", file=sys.stderr)
+            continue
+
+        roots = data.get("roots", {})
+        seen_urls = set()
+
+        def cb(name, url, folders):
+            nonlocal total
+            if url in seen_urls:
+                return
+            seen_urls.add(url)
+            # Prefer the bookmark's name; fall back to derived
+            display_name = name.strip() if name and name.strip() else derive_name_from_url(url)
+            write_url_file(display_name, url, total)
+            total += 1
+
+        for root_name in ("bookmark_bar", "other", "synced"):
+            if root_name in roots:
+                walk_chromium_bookmarks(roots[root_name], cb)
+        print(f"  {browser_id}: cumulative {total}")
+
+    return total
+
+
+# ── Firefox ───────────────────────────────────────────────────────────────
+
+
+def find_firefox_places():
+    """Locate the largest places.sqlite (usually the default profile)."""
+    base = HOME / ".mozilla/firefox"
+    if not base.exists():
+        return []
+    results = []
+    for profile_dir in base.iterdir():
+        places = profile_dir / "places.sqlite"
+        if places.exists():
+            results.append((profile_dir.name, places))
+    return results
+
+
+def scrape_firefox():
+    profiles = find_firefox_places()
+    if not profiles:
+        return 0
+    total = 0
+    for profile_name, places in profiles:
+        try:
+            # Copy because Firefox may lock the DB
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite") as tmp:
+                copyfile(places, tmp.name)
+                conn = sqlite3.connect(tmp.name)
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT b.title, p.url
+                    FROM moz_bookmarks b
+                    JOIN moz_places p ON b.fk = p.id
+                    WHERE b.type = 1 AND p.url NOT LIKE 'place:%'
+                          AND p.url NOT LIKE 'about:%'
+                          AND p.url NOT LIKE 'javascript:%'
+                """)
+                for title, url in cur.fetchall():
+                    title = title or derive_name_from_url(url)
+                    write_url_file(title, url, total)
+                    total += 1
+                conn.close()
+                os.unlink(tmp.name)
+        except (OSError, sqlite3.Error) as e:
+            print(f"  WARN: couldn't read Firefox/{profile_name}: {e}", file=sys.stderr)
+    return total
+
+
+# ── Main ──────────────────────────────────────────────────────────────────
+
+
+def main():
+    ES_WEBSITES.mkdir(parents=True, exist_ok=True)
+
+    # Clean previous auto-generated files (those prefixed with BM_PREFIX).
+    # Hand-added .url files (no prefix) are preserved.
+    cleaned = 0
+    for f in ES_WEBSITES.glob(f"{BM_PREFIX}*.url"):
+        f.unlink()
+        cleaned += 1
+    print(f"Cleaned {cleaned} stale bookmark files (kept hand-added entries).")
+
+    print("Scraping Chromium-family bookmarks...")
+    c = scrape_chromium()
+    print(f"  → {c} from Chromium-family browsers")
+
+    print("Scraping Firefox bookmarks...")
+    f = scrape_firefox()
+    print(f"  → {f} from Firefox")
+
+    print(f"\nTotal: {c + f} bookmark entries written to {ES_WEBSITES}")
+    print("Re-run anytime to refresh.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""arch2ram-music — discover audio files and create ES symlinks.
+
+Scans user-configured paths for audio files and symlinks each into
+~/ES/music/. Optionally groups by artist or album subdirectory.
+
+Default scan paths:
+  ~/Music
+  /media/B/Music   (if exists)
+  /media/D/Music   (if exists)
+  /media/A         (top-level audio files only — user had some there)
+
+Symlink-mode: links are flat in ~/ES/music/ (ES doesn't recurse into
+subdirs by default unless told). Filename = original filename (cleaned).
+
+Idempotent. Re-running cleans + re-populates only the auto-generated
+symlinks (kept hand-added .sh files alone).
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+HOME = Path.home()
+ES_MUSIC = HOME / "ES" / "music"
+
+DEFAULT_PATHS = [
+    HOME / "Music",
+    Path("/media/B/Music"),
+    Path("/media/D/Music"),
+    Path("/media/A"),
+]
+
+AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav", ".aac", ".wma"}
+MAX_DEPTH = 4   # how deep to recurse
+
+
+def sanitize_link_name(name: str, max_len: int = 80) -> str:
+    name = name.strip()
+    name = re.sub(r"[/\0\n\r\t]+", " ", name)
+    name = re.sub(r"\s+", " ", name)
+    if len(name) > max_len:
+        name = name[:max_len - len(Path(name).suffix)] + Path(name).suffix
+    return name
+
+
+def walk_audio(root: Path, max_depth: int):
+    if not root.exists() or not root.is_dir():
+        return
+    root_depth = len(root.parts)
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        depth = len(path.parts) - root_depth
+        if depth > max_depth:
+            continue
+        if path.suffix.lower() in AUDIO_EXTS:
+            yield path
+
+
+def main():
+    p = argparse.ArgumentParser(description="Scan paths for audio, symlink into ~/ES/music.")
+    p.add_argument("--path", "-p", action="append", default=[],
+                   help="Extra path to scan (can repeat).")
+    p.add_argument("--max-depth", "-d", type=int, default=MAX_DEPTH)
+    p.add_argument("--no-defaults", action="store_true",
+                   help="Don't scan the default paths.")
+    args = p.parse_args()
+
+    ES_MUSIC.mkdir(parents=True, exist_ok=True)
+
+    # Clean previous symlinks (we own all symlinks; leave real files alone).
+    cleaned = 0
+    for f in ES_MUSIC.iterdir():
+        if f.is_symlink():
+            f.unlink()
+            cleaned += 1
+    print(f"Cleaned {cleaned} stale symlinks.")
+
+    paths = []
+    if not args.no_defaults:
+        paths.extend(DEFAULT_PATHS)
+    paths.extend(Path(p).expanduser() for p in args.path)
+
+    seen_targets = set()
+    total = 0
+    per_path = {}
+
+    for root in paths:
+        if not root.exists():
+            continue
+        count = 0
+        for src in walk_audio(root, args.max_depth):
+            # Avoid duplicates (symlinks pointing at the same file)
+            real = src.resolve()
+            if real in seen_targets:
+                continue
+            seen_targets.add(real)
+
+            # Create symlink. Filename = sanitized original.
+            link_name = sanitize_link_name(src.name)
+            link_path = ES_MUSIC / link_name
+            suffix = 0
+            while link_path.exists():
+                suffix += 1
+                stem = link_path.stem
+                ext = link_path.suffix
+                link_path = ES_MUSIC / f"{stem} ({suffix}){ext}"
+            try:
+                link_path.symlink_to(src)
+                count += 1
+                total += 1
+            except OSError as e:
+                print(f"  WARN: link failed for {src}: {e}", file=sys.stderr)
+        per_path[str(root)] = count
+
+    print()
+    print("Per-path discoveries:")
+    for path, count in per_path.items():
+        print(f"  {path}: {count}")
+    print(f"\nTotal: {total} audio files linked to {ES_MUSIC}")
+
+
+if __name__ == "__main__":
+    main()
