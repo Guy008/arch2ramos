@@ -1,0 +1,217 @@
+#!/bin/bash
+# arch2ram-launch SYSTEM ROM — central launcher dispatch
+#
+# This is what every EmulationStation system <command> calls. Inspired
+# by Batocera's emulatorlauncher.py (697 lines) but radically simpler:
+# instead of 111 per-emulator config-generators, we have ~20 cases that
+# map a SYSTEM name to a concrete command line.
+#
+# All cases route through /home/Guy008/Scripts/runer.sh which applies
+# the user's GPU/CPU/Vulkan acceleration env vars (mangohud + gamemode
+# + RADV) before exec'ing the target.
+#
+# Usage from es_systems.cfg:
+#   <command>arch2ram-launch %SYSTEM% %ROM%</command>
+#
+# Manual:
+#   arch2ram-launch snes /path/to/game.smc
+#   arch2ram-launch apps /home/Guy008/ES/apps/firefox.desktop
+
+set -e
+
+SYSTEM="${1:?usage: $0 <SYSTEM> <ROM>}"
+ROM="${2:?usage: $0 <SYSTEM> <ROM>}"
+RUNER="${RUNER:-/home/Guy008/Scripts/runer.sh}"
+
+# Fall back to plain exec if runer.sh missing (don't block the user).
+if [[ ! -x "$RUNER" ]]; then
+    RUNER=/usr/bin/env
+fi
+
+# Resolve libretro core path lazily so we don't fail at script-load.
+core() {
+    local name="$1"
+    local path="/usr/lib/libretro/${name}_libretro.so"
+    [[ -f "$path" ]] || {
+        echo "ERROR: libretro core not installed: $path" >&2
+        echo "  install with: sudo pacman -S libretro-${name//_/-}" >&2
+        exit 2
+    }
+    echo "$path"
+}
+
+case "$SYSTEM" in
+    # ─── Generic apps via .desktop (Lutris exports, system apps, Steam shortcuts) ─
+    apps)
+        BASENAME="$(basename "$ROM" .desktop)"
+        exec "$RUNER" gtk-launch "$BASENAME"
+        ;;
+
+    # ─── Native Linux: run the wrapper or binary directly ─────────────────────
+    linux|native)
+        exec "$RUNER" "$ROM"
+        ;;
+
+    # ─── Windows games via wine (or pre-wrapped .sh that already calls wine) ──
+    windows)
+        if [[ "$ROM" == *.sh ]]; then
+            exec "$RUNER" "$ROM"
+        else
+            exec "$RUNER" wine "$ROM"
+        fi
+        ;;
+
+    # ─── Steam — single Big Picture entry (the wrapper .sh handles it) ────────
+    steam)
+        exec "$RUNER" "$ROM"
+        ;;
+
+    # ─── Nintendo: NES / SNES / N64 / GB / GBC / GBA / NDS ────────────────────
+    # NES: prefer mesen (accurate), fceumm if available
+    nes)
+        for c in mesen fceumm nestopia; do
+            p="/usr/lib/libretro/${c}_libretro.so"
+            [[ -f "$p" ]] && exec "$RUNER" retroarch -L "$p" "$ROM"
+        done
+        echo "ERROR: no NES core (try: sudo pacman -S libretro-mesen)" >&2; exit 2
+        ;;
+    # SNES: bsnes (accurate), snes9x fallback
+    snes)
+        for c in bsnes snes9x mesen-s bsnes_hd; do
+            p="/usr/lib/libretro/${c}_libretro.so"
+            [[ -f "$p" ]] && exec "$RUNER" retroarch -L "$p" "$ROM"
+        done
+        echo "ERROR: no SNES core (try: sudo pacman -S libretro-bsnes)" >&2; exit 2
+        ;;
+    n64)               exec "$RUNER" retroarch -L "$(core mupen64plus_next)"   "$ROM" ;;
+    gb|gameboy)        exec "$RUNER" retroarch -L "$(core gambatte)"           "$ROM" ;;
+    gbc|gameboycolor)  exec "$RUNER" retroarch -L "$(core gambatte)"           "$ROM" ;;
+    gba|gameboyadvance) exec "$RUNER" retroarch -L "$(core mgba)"              "$ROM" ;;
+    nds|nintendods)    exec "$RUNER" retroarch -L "$(core melonds)"            "$ROM" ;;
+    n3ds|3ds)
+        # Citra dead, fork Azahar in AUR. RetroArch core not stable.
+        if command -v citra-qt &>/dev/null; then
+            exec "$RUNER" citra-qt "$ROM"
+        elif command -v azahar &>/dev/null; then
+            exec "$RUNER" azahar "$ROM"
+        else
+            echo "ERROR: no 3DS emulator installed (try azahar / citra-qt)" >&2; exit 2
+        fi
+        ;;
+    switch)
+        if command -v ryujinx &>/dev/null; then
+            exec "$RUNER" ryujinx "$ROM"
+        elif command -v Ryujinx &>/dev/null; then
+            exec "$RUNER" Ryujinx "$ROM"
+        else
+            echo "ERROR: ryujinx not installed" >&2; exit 2
+        fi
+        ;;
+
+    # ─── Sega: Genesis/MegaDrive / Master System / 32X / SegaCD / Saturn ──────
+    megadrive|genesis)        exec "$RUNER" retroarch -L "$(core genesis_plus_gx)" "$ROM" ;;
+    mastersystem)             exec "$RUNER" retroarch -L "$(core genesis_plus_gx)" "$ROM" ;;
+    sega32x|32x)              exec "$RUNER" retroarch -L "$(core picodrive)"       "$ROM" ;;
+    segacd)                   exec "$RUNER" retroarch -L "$(core genesis_plus_gx)" "$ROM" ;;
+    saturn)                   exec "$RUNER" retroarch -L "$(core mednafen_saturn)" "$ROM" ;;
+    dreamcast)
+        if command -v flycast &>/dev/null; then
+            exec "$RUNER" flycast "$ROM"
+        else
+            exec "$RUNER" retroarch -L "$(core flycast)" "$ROM"
+        fi
+        ;;
+
+    # ─── Sony: PSX (PS1) / PS2 / PS3 / PSP ────────────────────────────────────
+    psx|ps1|playstation)
+        # Prefer standalone DuckStation, fallback to beetle-psx (libretro)
+        if command -v duckstation-qt &>/dev/null; then
+            exec "$RUNER" duckstation-qt -fullscreen "$ROM"
+        elif command -v duckstation &>/dev/null; then
+            exec "$RUNER" duckstation -fullscreen "$ROM"
+        else
+            for c in mednafen_psx_hw beetle_psx_hw mednafen_psx beetle_psx pcsx_rearmed; do
+                p="/usr/lib/libretro/${c}_libretro.so"
+                [[ -f "$p" ]] && exec "$RUNER" retroarch -L "$p" "$ROM"
+            done
+            echo "ERROR: no PSX core (try: sudo pacman -S libretro-beetle-psx-hw)" >&2; exit 2
+        fi
+        ;;
+    ps2)
+        if command -v pcsx2-qt &>/dev/null; then
+            exec "$RUNER" pcsx2-qt -fullscreen "$ROM"
+        else
+            exec "$RUNER" pcsx2 -fullscreen "$ROM"
+        fi
+        ;;
+    ps3)
+        if command -v rpcs3 &>/dev/null; then
+            exec "$RUNER" rpcs3 --no-gui "$ROM"
+        else
+            echo "ERROR: rpcs3 not installed (install from AUR)" >&2; exit 2
+        fi
+        ;;
+    psp)
+        if command -v ppsspp-qt &>/dev/null; then
+            exec "$RUNER" ppsspp-qt -fullscreen "$ROM"
+        else
+            exec "$RUNER" retroarch -L "$(core ppsspp)" "$ROM"
+        fi
+        ;;
+
+    # ─── Microsoft: Xbox / Xbox 360 ───────────────────────────────────────────
+    xbox)
+        command -v xemu &>/dev/null || { echo "ERROR: xemu not installed (AUR)" >&2; exit 2; }
+        exec "$RUNER" xemu -dvd_path "$ROM" -full-screen
+        ;;
+    xbox360)
+        command -v xenia &>/dev/null || { echo "ERROR: xenia not installed (AUR)" >&2; exit 2; }
+        exec "$RUNER" xenia "$ROM"
+        ;;
+
+    # ─── Nintendo home consoles: GameCube / Wii / Wii U ───────────────────────
+    gamecube|gc|wii)
+        command -v dolphin-emu &>/dev/null || { echo "ERROR: dolphin-emu not installed" >&2; exit 2; }
+        exec "$RUNER" dolphin-emu --batch --exec="$ROM"
+        ;;
+    wiiu)
+        command -v cemu &>/dev/null || { echo "ERROR: cemu not installed (AUR)" >&2; exit 2; }
+        exec "$RUNER" cemu --fullscreen --game "$ROM"
+        ;;
+
+    # ─── Atari ────────────────────────────────────────────────────────────────
+    atari2600)  exec "$RUNER" retroarch -L "$(core stella)"      "$ROM" ;;
+    atari5200)  exec "$RUNER" retroarch -L "$(core atari800)"    "$ROM" ;;
+    atari7800)  exec "$RUNER" retroarch -L "$(core prosystem)"   "$ROM" ;;
+    atarilynx)  exec "$RUNER" retroarch -L "$(core handy)"       "$ROM" ;;
+    jaguar)     exec "$RUNER" retroarch -L "$(core virtualjaguar)" "$ROM" ;;
+
+    # ─── PC / DOS ─────────────────────────────────────────────────────────────
+    dos|dosbox)
+        if command -v dosbox-staging &>/dev/null; then
+            exec "$RUNER" dosbox-staging "$ROM"
+        else
+            exec "$RUNER" dosbox "$ROM"
+        fi
+        ;;
+
+    # ─── Arcade ───────────────────────────────────────────────────────────────
+    arcade|mame|fbneo)
+        if command -v mame &>/dev/null; then
+            exec "$RUNER" mame "$ROM"
+        else
+            exec "$RUNER" retroarch -L "$(core mame)" "$ROM"
+        fi
+        ;;
+
+    # ─── Catch-all: unknown system — try a libretro core named after it ───────
+    *)
+        guessed="/usr/lib/libretro/${SYSTEM}_libretro.so"
+        if [[ -f "$guessed" ]]; then
+            exec "$RUNER" retroarch -L "$guessed" "$ROM"
+        fi
+        echo "ERROR: unknown system '$SYSTEM' and no libretro core named '${SYSTEM}_libretro.so'" >&2
+        echo "  add a case for it in $(basename "$0") or rename the system" >&2
+        exit 1
+        ;;
+esac
