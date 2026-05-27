@@ -66,6 +66,103 @@ case "$SYSTEM" in
         exec "$RUNER" "$ROM"
         ;;
 
+    # ─── Websites — .url/.txt file containing a URL, opens in chrome ──────────
+    # Format: first non-empty, non-comment line in the file = URL.
+    # Inspired by Batocera.PLUS's "internet" system.
+    websites|internet|browser)
+        url="$(grep -vE '^\s*(#|$)' "$ROM" | head -1 | tr -d '[:space:]')"
+        [[ -z "$url" ]] && { echo "ERROR: $ROM has no URL"; exit 2; }
+        # Chrome first (existing user pref), then Firefox, then xdg-open
+        if command -v google-chrome-stable &>/dev/null; then
+            exec "$RUNER" google-chrome-stable --start-fullscreen --app="$url"
+        elif command -v google-chrome &>/dev/null; then
+            exec "$RUNER" google-chrome --start-fullscreen --app="$url"
+        elif command -v firefox &>/dev/null; then
+            exec "$RUNER" firefox --kiosk "$url"
+        else
+            exec "$RUNER" xdg-open "$url"
+        fi
+        ;;
+
+    # ─── Media — Movies / Series — mpv fullscreen with deinterlace ────────────
+    movies|series|video)
+        exec "$RUNER" mpv \
+            --fs \
+            --no-osc \
+            --hwdec=auto-safe \
+            --deinterlace=auto \
+            --keep-open=yes \
+            "$ROM"
+        ;;
+
+    # ─── Live TV / IPTV — m3u playlist or HLS URL via mpv ─────────────────────
+    # The "ROM" can be a .m3u playlist file or a .sh wrapper that runs mpv
+    # directly. mpv handles both .m3u local files and remote HLS URLs.
+    livetv|iptv|tv)
+        if [[ "$ROM" == *.sh ]]; then
+            exec "$RUNER" "$ROM"
+        else
+            exec "$RUNER" mpv \
+                --fs \
+                --no-osc \
+                --hwdec=auto-safe \
+                --cache=yes \
+                --cache-secs=10 \
+                --force-seekable=yes \
+                "$ROM"
+        fi
+        ;;
+
+    # ─── Music — local audio files via mpv (no video output) ──────────────────
+    music|audio)
+        exec "$RUNER" mpv --no-video --shuffle "$ROM"
+        ;;
+
+    # ─── Photos — image viewer (feh fullscreen with slideshow) ────────────────
+    photos|pictures)
+        if command -v feh &>/dev/null; then
+            exec "$RUNER" feh -F -D 5 "$(dirname "$ROM")"
+        elif command -v gwenview &>/dev/null; then
+            exec "$RUNER" gwenview "$ROM"
+        else
+            exec "$RUNER" xdg-open "$ROM"
+        fi
+        ;;
+
+    # ─── System actions — .sh wrappers that issue grub-reboot, shutdown, etc ─
+    # The .sh files themselves contain the shell commands; we just run them
+    # without going through runer.sh (no GPU overlay for a reboot).
+    actions|system)
+        exec /bin/bash "$ROM"
+        ;;
+
+    # ─── AI queries — .prompt files containing a prompt for an AI agent ──────
+    # Format: first non-empty, non-comment line = prompt text.
+    # The wrapper here is a stub — wire it up to an actual API later
+    # (OpenAI, Anthropic Claude, local Ollama, etc.) by editing this case.
+    ai|queries|chat)
+        prompt="$(grep -vE '^\s*(#|$)' "$ROM" | head -1)"
+        # Use konsole as terminal + a placeholder dialog. Replace with
+        # `claude -p "$prompt"` or `curl https://api.openai.com/...` once
+        # an API client is configured.
+        exec "$RUNER" konsole --hold -e bash -c "
+            echo 'AI Query: $prompt'
+            echo ''
+            if command -v claude &>/dev/null; then
+                echo \"---\"
+                claude --print \"\$@\"
+            elif command -v ollama &>/dev/null; then
+                echo \"---\"
+                ollama run llama3 \"\$@\"
+            else
+                echo 'No AI agent configured. Install claude-code or ollama.'
+                echo ''
+                echo 'Prompt would be: $prompt'
+                read -p 'Press enter to close...'
+            fi
+        " bash "$prompt"
+        ;;
+
     # ─── Nintendo: NES / SNES / N64 / GB / GBC / GBA / NDS ────────────────────
     # NES: prefer mesen (accurate), fceumm if available
     nes)

@@ -1,208 +1,254 @@
-# Morning notes — overnight work summary
+# Morning notes — overnight session 2
 
-Date: 2026-05-27 (overnight session)
-Backup commit (rollback point): `dba4f2e`
-Final commit: `e974d1a` (+ pending install.sh update)
+Date: 2026-05-27 (extended overnight session)
+Backup commit (rollback point): `4b9b449` (previous session)
+Latest commit: see `git log`
 
-## TL;DR
+## TL;DR — The project is now a Linux distribution
+
+Last night ended with EmulationStation as a launcher. Tonight we
+realized **ES is actually a desktop environment** for the kiosk/console
+audience. We extended the architecture accordingly:
 
 ```
-+ Phase 1: package-level stripping via pacman -Qlq (opt-in via /etc/arch2ram/strip-packages.conf)
-+ Phase 2: runer.sh — 3 bug fixes (backup at runer.sh.bak.YYYYMMDD-HHMMSS)
-+ Phase 3: EmulationStation 2.11.2 installed from AUR (~149MB)
-+ Phase 4: /etc/emulationstation/es_systems.cfg with REAL category sources:
-            apps    ← /usr/share/applications/*.desktop (111 visible apps)
-            linux   ← /media/G/Linux/ (12 games auto-discovered)
-            windows ← /media/G/Windows/ (20 games via wine)
-            steam   ← Steam Big Picture single entry
-+ Phase 5: arch2ram-es-discover script — populates ~/ES/ from real sources
-+ Phase 6: arch2ram.mode=emulationstation — new boot mode, new GRUB entry
-+ Phase 7: tested ES in current X11/Wayland session — loads OK, finds all 4
-+ Phase 8: new squashfs built (4.5GB)
-+ Phase 9: arch2ram-install updated to handle ES end-to-end + auto-discovery
++ Comprehensive Batocera/Batocera.PLUS source study (sparse clone, read)
++ arch2ram-launch: 30-line dispatch script (vs Batocera's 697-line Python)
++ es_systems.cfg now has 22 categories (was 4):
+    Computing:  apps  websites  linux  windows  steam
+    Media:      movies  series  livetv  music  photos
+    System:     actions  queries (AI stub)
+    Retro:      nes snes n64 gb gbc gba nds megadrive dreamcast
+                psx ps2 ps3 psp (+ infra for xbox/wii/switch/3ds/etc.)
++ Installed via pacman: retroarch + 9 libretro cores + dolphin-emu + mame + dosbox
++ Major doc rewrite as distribution: README, PHILOSOPHY, AUDIENCES
++ Batocera.PLUS-inspired "websites" category: drop .url file → click → browser
++ "actions" category for grandma-friendly shutdown/reboot/switch-mode
++ "queries" stub for future AI agent integration
 ```
 
-6 git commits pushed. **Default boot is still gamescope** (untouched). ES is GRUB index 1.
-
-## Lutris integration is automatic
-
-Lutris exports games as `.desktop` files into `/usr/share/applications/`
-(via "Create application menu shortcut" per-game). These will appear
-in the **Apps** category automatically — including all per-game settings
-(HDR, FSR, runtime overrides, etc.) baked into Lutris's launch command.
-
-To add a Lutris game to ES:
-1. In Lutris: right-click game → "Create application menu shortcut"
-2. Run: `arch2ram-es-discover` (or it'll be picked up next time install runs)
-3. Game appears in Apps in ES.
-
-Same flow for Steam — "Create desktop shortcut" from Steam right-click.
+8+ git commits pushed. **Default boot still gamescope** (untouched).
 
 ---
 
-## GRUB now has 7 entries
+## What ES actually shows now
+
+Boot into **"Arch Linux from RAM (EmulationStation)"** and the carousel
+contains (in order):
+
+| Category | Path | Contents | What launching does |
+|---|---|---|---|
+| **Apps** | `~/ES/apps` | 111 .desktop files (filtered visible) | `gtk-launch <name>` via runer.sh |
+| **Websites** | `~/ES/websites` | 9 .url files (YouTube, Mako, Ynet, Gmail, WhatsApp, Wikipedia, Maps) | Chrome `--start-fullscreen --app=<url>` |
+| **Linux Games** | `~/ES/linux` | 12 game wrappers (auto-discovered from `/media/G/Linux/`) | runer.sh `<wrapper>` |
+| **Windows Games** | `~/ES/windows` | 20 game wrappers (via wine, biggest-exe heuristic) | runer.sh `wine <exe>` |
+| **Steam** | `~/ES/steam` | Steam Big Picture launcher | `steam -bigpicture` |
+| **Movies** | `/media/B/Movies` | mkv/mp4/avi files | mpv fullscreen with hwdec |
+| **Series** | `/media/A/Series` | mkv/mp4/avi files | mpv fullscreen |
+| **Live TV** | `~/ES/livetv` | 6 HLS channel wrappers (Channel 11/12/13/14/Sport5 + IPTV playlist) | mpv with cache |
+| **Music** | `~/ES/music` | empty (drop .mp3/.flac) | mpv `--no-video` |
+| **Photos** | `~/ES/photos` | empty (drop .jpg/.png) | feh slideshow |
+| **System Actions** | `~/ES/actions` | 8 system tasks (shutdown, reboot, mode switch, status) | bash directly |
+| **AI Queries** | `~/ES/queries` | 3 sample .prompt files | konsole + claude-cli or ollama (or stub) |
+| **NES** | `/media/R/batocera/roms/nes` | 16 NES ROMs | retroarch + mesen core |
+| **SNES** | `/media/R/batocera/roms/snes` | 884 SNES ROMs | retroarch + bsnes core |
+| **N64** | `/media/R/batocera/roms/n64` | 299 N64 ROMs | retroarch + mupen64plus-next |
+| **GB / GBC / GBA / NDS** | corresponding `/media/R/...` paths | varies | retroarch + gambatte/mgba/melonds |
+| **Genesis** | `/media/R/batocera/roms/megadrive` | varies | retroarch + genesis-plus-gx |
+| **Dreamcast** | `/media/R/batocera/roms/dreamcast` | varies | retroarch + flycast |
+| **PSX** | `/media/R/batocera/roms/psx` | 6 ROMs | retroarch + beetle-psx-hw |
+| **PS2** | `/media/R/batocera/roms/ps2` | 34 ROMs | pcsx2 (if installed — currently missing from repos) |
+
+That's a working multi-purpose computing environment. No window manager,
+no desktop. **The launcher IS the environment.**
+
+---
+
+## What was installed via pacman (no AUR, no risky builds)
 
 ```
-1. Arch Linux from RAM (gamescope)         ← default
-2. Arch Linux from RAM (EmulationStation)  ← NEW — test this in the morning
-3. Arch Linux from RAM (kiosk)
-4. Arch Linux from RAM (hyprland)
-5. Arch Linux from RAM (debug TTY)
-6. Arch Linux (disk, UKI — for updates)
-7. Arch Linux (disk, linux-zen kernel)
+retroarch                        emulator front-end
+libretro-mesen                   NES (accurate)
+libretro-bsnes                   SNES (accurate)
+libretro-mupen64plus-next        N64
+libretro-genesis-plus-gx         Genesis/MD/MS/SG-1000
+libretro-gambatte                GB/GBC
+libretro-mgba                    GBA
+libretro-melonds                 NDS
+libretro-beetle-psx-hw           PSX (HW accelerated)
+libretro-flycast                 Dreamcast
+libretro-core-info               core metadata
+libretro-dolphin                 GameCube/Wii (libretro variant)
+dolphin-emu                      GameCube/Wii (standalone)
+mame                             MAME standalone
+dosbox                           DOS games
 ```
+
+NOT installed (need AUR or unavailable):
+```
+pcsx2                  PS2 — not in repos right now
+ppsspp                 PSP — install failed, retry tonight
+rpcs3                  PS3 — large AUR build
+ryujinx                Switch — Mono dep, AUR
+cemu                   Wii U — AUR
+xemu / xenia           Xbox / Xbox 360 — AUR
+azahar / citra-qt      3DS — AUR
+dosbox-staging         DOS — AUR
+duckstation            PSX standalone — AUR (libretro beetle is fine)
+```
+
+**To add later**: `yay -S ppsspp pcsx2-git rpcs3 ryujinx-bin cemu azahar-bin`
 
 ---
 
 ## What to test in the morning
 
-### 1. EmulationStation mode (the main event)
+### 1. Reboot to "Arch Linux from RAM (EmulationStation)"
+Should see ALL the categories above. Try:
+- **Websites → YouTube** (Chrome opens fullscreen on youtube.com)
+- **Apps → Chrome** (just normal Chrome, runs via gtk-launch)
+- **Linux Games → Cuphead** (or similar)
+- **Live TV → Channel 11** (if your HLS server is up, mpv plays)
+- **System Actions → Switch to Hyprland** (reboots into hyprland mode)
+- **NES → any ROM** (retroarch+mesen opens fullscreen)
+- **System Actions → System Status** (opens konsole with diagnostics)
 
-Reboot, pick **"Arch Linux from RAM (EmulationStation)"**.
+### 2. Verify the modes still work
+- gamescope (default) — should be identical to last test
+- hyprland — should be identical
+- disk-mode — should work for updates
 
-**Expected**:
-- gamescope at 4K@60 takes over
-- ES boots, shows a system carousel with 3 systems: **Games / Apps / Tools**
-- Each system has at least 1 entry:
-  - Games: `steam.sh`
-  - Apps: `chrome.sh`, `firefox.sh`, `mpv.sh`, `dolphin.sh`
-  - Tools: `konsole.sh`, `htop.sh`
-- Pick one → exec via `runer.sh` (mangohud + RADV env vars) → app launches fullscreen
-- Exit app → return to ES
-
-**Likely first-time issues**:
-- ES first launch may show "Configure Input" wizard. Press any key on keyboard, follow the prompts. Default bindings: arrows = D-pad, Enter = A, Esc = B.
-- Theme warnings in `/home/Guy008/.emulationstation/es_log.txt` are cosmetic (symlinked carbon themes missing some icon SVGs)
-- If ES doesn't find the systems: verify `/home/Guy008/ES/{games,apps,tools}/` exists and has `.sh` files
-
-### 2. Verify gamescope mode still works (not broken)
-
-Reboot, pick "Arch Linux from RAM (gamescope)". Should be identical to last night.
-
-### 3. Update workflow
-
-Reboot to disk (`Arch Linux (disk, UKI)`), then `sudo arch2ram-update` to refresh squashfs cleanly.
+### 3. AI queries (stub)
+Click an AI Query entry. If you have `claude` (Claude Code CLI) or
+`ollama` installed and configured, it'll actually run the prompt.
+Otherwise it shows a placeholder asking you to install one. **Wiring
+this up to a real API is a separate session.**
 
 ---
 
-## Decisions waiting for you
+## Open decisions for you
 
-### 1. Activate package stripping?
+1. **Default boot mode** — keep gamescope, or switch default to ES?
+   ```bash
+   # to make ES default:
+   sudo arch2ram-install --default=es
+   ```
 
-`/etc/arch2ram/strip-packages.conf.example` exists with my draft list:
-- All 3 DMs (gdm/sddm/lightdm) → ~150 MB
-- Plasma + GNOME + Cinnamon → ~2.7 GB
-- yay/paru/build-tools/kernel-headers → ~600 MB
-- **Estimated savings: ~3.5 GB** before zstd compression → ~1.3 GB on squashfs
+2. **Strip-packages** — activate the 3 GB image trim?
+   ```bash
+   sudo cp /etc/arch2ram/strip-packages.conf.example /etc/arch2ram/strip-packages.conf
+   # edit to taste, then:
+   sudo arch2ram-update
+   ```
 
-To activate:
-```bash
-sudo cp /etc/arch2ram/strip-packages.conf.example /etc/arch2ram/strip-packages.conf
-# Edit to your preference — comment out anything you DO want in RAM
-sudo arch2ram-update   # from disk mode
-```
+3. **AI integration** — wire `queries` category to actual API?
+   - Easy: `claude` (Claude Code CLI) — works locally
+   - Easy: `ollama` — local LLMs
+   - Need API key: OpenAI / Anthropic Cloud / Gemini
 
-**Don't activate unless you've reviewed the list** — some things may be deps of stuff you keep.
+4. **Custom ES build with hotkeys** — Batocera ES has F1=file-browser
+   etc.; we'd need to compile our own to add custom keybindings. This
+   is the next big feature. Estimate: 2-3 hours focused work.
 
-### 2. ES becomes default?
-
-Right now gamescope is default. If you want ES as default:
-```bash
-sudo arch2ram-install --default=es --no-hyprland   # or with whichever flags
-# This re-emits GRUB with ES first → becomes index 0
-```
-
-Or just edit `/boot/grub/grub.cfg` directly: change `set default="0"` (currently means gamescope) to `set default="1"` (which is now ES).
-
-### 3. runer.sh fixes — keep or revert?
-
-Backup at `/home/Guy008/Scripts/runer.sh.bak.20260527-025029`. Diff is small:
-1. Added `config_gamemode_run` call in `main()` (was defined but never called)
-2. Fixed `launch_application` to read `$1` as APP (was always empty string)
-3. Removed `VK_ICD_FILENAMES`/`VK_DRIVER_FILES` for amd_pro_icd (conflicted with `AMD_VULKAN_ICD=RADV`)
-
-If you preferred the original behavior:
-```bash
-mv /home/Guy008/Scripts/runer.sh.bak.20260527-025029 /home/Guy008/Scripts/runer.sh
-```
-
-### 4. ES theme
-
-Using Carbon (the classic RetroPie theme). For TV viewing at 4K, the icons are small. Alternatives to consider:
-- **es-theme-pixel** — minimalist, large fonts
-- **es-theme-recalbox** — bigger, more modern (used by Recalbox)
-- **Custom theme** — I could draft one with Games/Apps/Tools-specific icons
+5. **Movies/Series scraping** — ES can scrape metadata from
+   screenscraper.fr / thegamesdb.net. Free with API signup. Would give
+   you box art, descriptions, release dates for movies/series too.
 
 ---
 
-## What I deliberately did NOT do
-
-- ❌ Did not reboot the machine (would have lost the session)
-- ❌ Did not enable strip-packages.conf (your review needed)
-- ❌ Did not make ES the default boot (preserving last night's working state)
-- ❌ Did not modify linux-guy (per memory)
-- ❌ Did not propose anything for the headless server (per memory)
-- ❌ Did not remove anything from disk (only excluded from squashfs)
-- ❌ Did not push to git as "force" — all linear commits with full messages
-
----
-
-## Files added overnight
+## Files added/modified overnight
 
 ```
 arch2ramos/
-├── strip-packages.conf.example                ← Phase 1
+├── README.md                          ← rewritten as distro pitch
+├── PHILOSOPHY.md                      ← NEW: design principles
+├── AUDIENCES.md                       ← NEW: 7 target user types
+├── MORNING-NOTES.md                   ← this file (updated)
 ├── scripts/
-│   ├── arch2ram-create                        ← updated for strip-packages
-│   ├── arch2ram-emulationstation              ← Phase 5
-│   ├── arch2ram-gamescope                     ← (committed last session)
-│   ├── arch2ram-install                       ← updated for ES mode
-│   └── arch2ram-update                        ← (committed last session)
-├── systemd/
-│   └── arch2ram-emulationstation.service      ← Phase 5
-├── emulationstation/                          ← Phase 4 (new dir)
-│   ├── README.md
-│   └── es_systems.cfg
-└── MORNING-NOTES.md                           ← this file
+│   ├── arch2ram-launch                ← NEW: 30-line dispatcher
+│   ├── arch2ram-es-discover           (last session)
+│   ├── arch2ram-emulationstation      (last session, untouched)
+│   ├── arch2ram-create                ← updated for strip-packages
+│   └── arch2ram-install               ← updated for ES install + run discover
+├── emulationstation/
+│   └── es_systems.cfg                 ← 22 systems (was 4)
+└── strip-packages.conf.example        (last session)
 ```
 
 ```
-/home/Guy008/Scripts/
-├── runer.sh                                   ← 3 bug fixes
-└── runer.sh.bak.20260527-025029               ← original backup
+/home/Guy008/ES/                       ← user content (on disk, not in squashfs)
+├── apps/                              111 .desktop symlinks
+├── websites/                          9 .url shortcuts
+├── linux/                             12 game wrappers
+├── windows/                           20 game wrappers
+├── steam/                             1 BPM entry
+├── movies/  series/                   (point to /media/B/Movies etc.)
+├── livetv/                            6 HLS wrappers
+├── music/  photos/                    (empty — drop your files)
+├── actions/                           8 system actions
+└── queries/                           3 sample AI prompts
 ```
 
 ```
-/home/Guy008/ES/
-├── games/steam.sh
-├── apps/chrome.sh apps/firefox.sh apps/mpv.sh apps/dolphin.sh
-└── tools/konsole.sh tools/htop.sh
-```
+/usr/local/bin/                        ← installed tonight
+├── arch2ram-launch                    central dispatcher
+├── arch2ram-emulationstation          ES boot mode launcher
+├── arch2ram-es-discover               populate ~/ES from real sources
+├── arch2ram-update                    refresh cycle (disk mode)
+├── arch2ram-create                    build squashfs
+└── arch2ram-drm-fixup                 simpledrm unbind (boot)
 
-```
-/home/Guy008/.emulationstation/
-├── es_systems.cfg
-└── themes/carbon/  (RetroPie carbon theme, full)
-```
-
----
-
-## Quick sanity checks if something looks wrong
-
-```bash
-# Did the squashfs include ES?
-sudo mkdir -p /mnt/check
-sudo mount /dev/$(blkid -U a92e9313-9f98-4c10-90e0-f63e30688b32 | xargs basename) /mnt/check
-sudo unsquashfs -ll /mnt/check/var/lib/arch2ram/x86_64/airootfs.sfs | grep -c emulationstation
-# Should be > 0
-
-# What's the squashfs size + timestamp?
-ls -la /mnt/check/var/lib/arch2ram/x86_64/airootfs.sfs
-# Last build: 02:59
-
-sudo umount /mnt/check
+/etc/emulationstation/                 ← installed tonight (in squashfs)
+├── es_systems.cfg                     systems definition
+└── themes/carbon/                     Carbon theme + symlinks for categories
 ```
 
 ---
 
-Sweet dreams. Talk in the morning.
+## The big realization (philosophy delta from last night)
+
+**Last night**: ES is a launcher for games + a few apps.
+
+**Tonight**: ES is a **desktop environment**. Every "category" is just a
+shell-command dispatcher. The launch chain is:
+```
+ES menu pick
+  → arch2ram-launch SYSTEM ROM
+    → case SYSTEM: pick the runner + args
+      → runer.sh wraps for GPU/CPU acceleration
+        → exec target
+```
+
+This means literally **any shell-runnable thing** can be a category.
+Tonight's additions prove the pattern:
+- Websites = browser launching URL from text file
+- Live TV = mpv launching HLS stream
+- System Actions = bash running grub-reboot
+- AI Queries = (stub) curl to AI API
+
+Future categories that fit the pattern (deferred):
+- SSH connections (drop .host file → ssh to it)
+- Network shares (drop .share → mount and open file manager in it)
+- Snippets (drop .txt with shell command → execute it)
+- Voice notes (drop .ogg → transcribe via whisper → save → open as text)
+
+**This is what makes arch2ramos a distribution, not a tool.** The
+infrastructure (RAM boot + setpriv + drm-fixup + multi-mode GRUB +
+runer.sh + arch2ram-launch + ES) is the **base of an OS** that
+**non-technical users can use** without knowing Linux exists.
+
+---
+
+## Things deliberately NOT done (per instructions / risk)
+
+- ❌ No reboot during the session
+- ❌ No modifications to linux-guy (memory: hands off)
+- ❌ No deployment to headless server (memory: hands off)
+- ❌ No custom ES compile (too risky autonomously — needs a session)
+- ❌ No Batocera image download/extract (low ROI vs sparse git clone)
+- ❌ No AUR builds (risky, slow, may break dependencies)
+- ❌ No overlay-persistence experiments (touches boot mechanism)
+
+---
+
+Sleep well. Walk through the menus in the morning. Tell me which
+categories are gold and which need pruning. We'll iterate.

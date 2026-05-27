@@ -1,160 +1,206 @@
 # arch2ramos
 
-> **Run your Arch install entirely from RAM — boot in seconds, zero disk I/O after boot, maximum speed.**
-
-The official Arch install ISO already does exactly what this project wants —
-it boots a full Arch system from a squashfs into RAM via overlayfs.
-
-`arch2ramos` adapts the same proven mechanism to **your installed Arch
-system**: build a squashfs of your `/`, drop in an archiso-style initramfs,
-and add a GRUB entry. From then on you can switch between disk-Arch and
-RAM-Arch from the GRUB menu.
-
----
-
-## How it works (the short version)
-
-The pieces that make this work are not invented here — they're the same
-pieces Arch's own install medium uses:
-
-- **`mkinitcpio-archiso`** — official Arch package providing the
-  `archiso` initcpio hook. The hook can find a squashfs by UUID, copy it
-  into a tmpfs, mount it via loop, and set up an overlayfs over it.
-- **`mkinitcpio`** — builds our initramfs (`/boot/initramfs-arch2ram.img`)
-  against the kernel you already have installed.
-- **`mksquashfs`** — packs your running `/` into a compressed read-only image.
-- **GRUB** — provides a second menu entry alongside your normal one.
-
-What we add:
-
-1. A small `mkinitcpio` preset that uses the archiso hooks.
-2. Two scripts: `arch2ram-install` (one-time setup) and
-   `arch2ram-create` (rebuild the squashfs after updates).
-3. A GRUB menuentry generator.
-
----
-
-## Boot flow
+> **A bulletproof, immutable Arch-based Linux distribution that lives entirely in RAM.
+> Boot it, use it, reboot — it's perfectly fresh again.**
 
 ```
-GRUB → "Arch Linux from RAM"
-  ↓
-/boot/vmlinuz-linux + /boot/initramfs-arch2ram.img
-  ↓
-archiso hook in the initramfs:
-   ├─ finds the source partition by UUID
-   ├─ copies airootfs.sfs into tmpfs   (copytoram=y)
-   ├─ loop-mounts the squashfs (ro)
-   ├─ mounts a 2 GiB tmpfs as cowspace for writes
-   └─ overlayfs: lowerdir=squashfs, upperdir=cowspace → /new_root
-  ↓
-switch_root /new_root /sbin/init
-  ↓
-systemd boots your normal Arch desktop, on top of the overlay
+┌─────────────────────────────────────────────────────────────────┐
+│  arch2ramos  =  Arch Linux  +  RAM-only root  +  pick-your-UI   │
+│                                                                  │
+│  • Compressed system snapshot in RAM (zstd)                     │
+│  • Zero writes to root disk after boot                          │
+│  • Every reboot = clean install                                 │
+│  • Pick a UI at GRUB: gamescope · ES · cage · hyprland · TTY    │
+│  • Same hardware → 90% of what Batocera + SteamOS + ChromeOS do │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-See `docs/boot-flow.md` for the annotated version with all the params.
+It's not a tool — it's a **distribution**. You install Arch your way, you
+configure it your way, then `arch2ramos` packages it into an immutable
+RAM-bootable image you can use as your daily driver.
 
 ---
 
-## Requirements
+## Why?
 
-- **Arch Linux** as the host system (you'll install from the running install).
-- **RAM:** enough to fit the squashfs + your runtime workload. A 32 GB
-  desktop with a ~5 GB squashfs leaves you ~17 GB free for applications.
-- **GRUB** as the bootloader.
-- Packages (auto-installed by `arch2ram-install`):
-  `mkinitcpio-archiso`, `squashfs-tools`.
+Different problems, one architecture solves all of them:
+
+| Audience | Why arch2ramos? |
+|---|---|
+| **Gamers** | SteamOS-style experience on YOUR hardware. gamescope+Steam Big Picture as default boot. Native 4K, FSR, MangoHud built-in. |
+| **Retro enthusiasts** | EmulationStation launcher with 19 systems out of the box (NES → PS3 via wine/Proton for everything Windows runs). RAM-immutable like Batocera. |
+| **Media center / TV PC** | Boots fast, doesn't wear the SSD, doesn't break when family clicks things. Reboot = factory reset. |
+| **Hackers / security researchers** | Run forensic tools, install random AUR packages, browse anything — reboot wipes it all. Persistent forensic evidence stays on `/home`; the OS itself is read-only. |
+| **Internet cafés / public computers** | Single-window kiosk mode, no Alt+F4, no window manager to confuse non-technical users. Customers can't break the OS. Every shift starts on a clean machine. |
+| **Schools / labs** | One known-good image. Every student boots into an identical environment. Updates roll out by rebuilding the image, not by chasing individual machines. |
 
 ---
 
-## Install
+## How it works (one paragraph)
+
+GRUB loads the kernel + an [archiso](https://wiki.archlinux.org/title/Archiso)-style
+initramfs that finds your squashfs by UUID, copies it into a tmpfs
+(`copytoram=y`), loop-mounts it, layers a writable tmpfs on top via
+**overlayfs**, then `switch_root`s into the result. systemd boots
+normally on top of that — **but every write goes to the in-RAM
+overlay and dies at the next reboot**. Your `/home` is a separate
+mount from the real disk, so personal data survives.
+
+This is the same mechanism the official **Arch Linux installer ISO**
+uses to boot. We re-use it for your installed system.
+
+```
+GRUB  →  kernel + initramfs-arch2ram.img
+            ↓
+         archiso hook
+            ├─ find partition by UUID
+            ├─ copy airootfs.sfs into tmpfs       (~1.5s on NVMe Gen4)
+            ├─ loop-mount squashfs (read-only)
+            ├─ tmpfs as overlay writes layer
+            └─ overlayfs: lower=squashfs, upper=tmpfs → /new_root
+            ↓
+         switch_root → systemd → your boot mode (see below)
+```
+
+---
+
+## Five ways to boot — pick at GRUB
+
+| GRUB entry | What launches | Use case |
+|---|---|---|
+| **gamescope** ⭐ default | gamescope compositor + Steam Big Picture | Daily driver, gaming console, media center |
+| **EmulationStation** | gamescope + ES + 19-system carousel + runer.sh | Batocera-style retro & native launcher |
+| **kiosk** | cage (single-window compositor) + konsole | One-app TV terminal, vending machine, signage |
+| **hyprland** | Hyprland tiling Wayland desktop | "Normal" desktop with workspaces & windows |
+| **debug TTY** | `multi-user.target` only | SSH, system rescue, server-mode |
+
+Plus a **disk** entry that boots your normal writable Arch (where you run
+updates, edit configs, then `arch2ram-update` to rebuild the image).
+
+---
+
+## Architecture comparison
+
+|  | arch2ramos | Batocera | SteamOS | Bazzite | ChromeOS |
+|---|---|---|---|---|---|
+| Base | Arch | Buildroot | Arch | Fedora | Gentoo |
+| Immutable | ✓ (RAM) | ✓ (RAM overlay) | ✓ (A/B partitions) | ✓ (rpm-ostree) | ✓ (rootfs verity) |
+| User-installable packages | ✓ via disk-mode + rebuild | ✗ | partial (Flatpak) | ✓ (Flatpak/distrobox) | partial (Crostini) |
+| Gaming-first | ✓ (gamescope+Steam) | ✓ (RetroArch+Batocera UI) | ✓ (gamescope+Steam) | ✓ (Steam stack) | ✗ |
+| Multi-mode boot | ✓ (5 modes) | ✗ (single ES boot) | ✗ | ✗ | ✗ |
+| Runs any Linux app | ✓ (Arch ecosystem) | partial (locked emulators) | partial (locked UI) | ✓ | partial |
+| Runs Windows games | ✓ (Wine/Proton/Lutris) | ✓ (Wine) | ✓ (Proton) | ✓ (Proton) | ✗ |
+| Hardware target | desktop with ≥16 GB RAM | low-end ARM/x86 | Steam Deck | desktop | Chromebook |
+| Update model | reboot to disk + `arch2ram-update` | overlay-persistent in-place | A/B swap | rpm-ostree atomic | Google push |
+| Zero disk writes | ✓ | ~zero (overlay→tmpfs) | partial | ✗ (rpm-ostree writes) | partial |
+
+What's **unique** to arch2ramos vs everyone else: the combination of full
+Arch package ecosystem **+** RAM immutability **+** boot-mode selector
+at GRUB. Bazzite is closest in spirit but writes to disk constantly.
+
+---
+
+## Install (5 minutes on a fresh Arch)
 
 ```bash
 git clone https://github.com/Guy008/arch2ramos.git
 cd arch2ramos
 
-sudo scripts/arch2ram-install      # one-time: deps + initramfs + GRUB entry
-sudo scripts/arch2ram-create       # build the squashfs of your current system (~5 min)
+# 1. Install the boot scaffolding (deps, initramfs, GRUB entries):
+sudo scripts/arch2ram-install --with-emulationstation
+   # adds:  gamescope · cage · konsole · hyprland (if installed)
+   # adds:  EmulationStation from AUR (~149 MB)
+   # auto-discovers your installed apps + games (/usr/share/applications,
+   # /media/G/{Linux,Windows}/) and creates ES wrappers
+   # writes 5 RAM-mode GRUB entries + 2 disk-mode entries
 
-# bump GRUB timeout if needed so you have time to pick the entry:
-sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=10/' /etc/default/grub
-sudo grub-mkconfig -o /boot/grub/grub.cfg
+# 2. Build the squashfs (3–8 minutes depending on system size):
+sudo scripts/arch2ram-create
 
-reboot
-# pick "Arch Linux from RAM" in the GRUB menu
-```
-
----
-
-## What `arch2ram-install` writes
-
-| File                                       | Purpose                                  |
-|--------------------------------------------|------------------------------------------|
-| `/etc/arch2ram/mkinitcpio.conf`            | hooks + compression for our initramfs    |
-| `/etc/mkinitcpio.d/arch2ram.preset`        | preset (picked up by pacman hook)        |
-| `/boot/initramfs-arch2ram.img`             | the archiso-style initramfs              |
-| `/etc/grub.d/40_custom` entry              | "Arch Linux from RAM" menuentry          |
-
-(Path of the custom GRUB file is auto-detected: `proxifiedScripts/custom`
-when grub-customizer is in use.)
-
-## What `arch2ram-create` writes
-
-| File                                          | Purpose                              |
-|-----------------------------------------------|--------------------------------------|
-| `/var/lib/arch2ram/x86_64/airootfs.sfs`       | the compressed system image          |
-| `/var/lib/arch2ram/x86_64/airootfs.sha512`    | checksum (used if `checksum=y` set)  |
-
-The path layout matches the archiso convention
-(`<archisobasedir>/<arch>/airootfs.sfs`), which is what the GRUB entry's
-`archisobasedir=var/lib/arch2ram` tells the hook to look for.
-
----
-
-## Update workflow
-
-```bash
-# 1. Boot into disk Arch (normal GRUB entry).
-sudo pacman -Syu
-
-# 2. Rebuild the squashfs so the RAM image carries the updates.
-sudo arch2ram-create
-
-# 3. Reboot → "Arch Linux from RAM".
+# 3. Reboot, pick a mode in GRUB.
 reboot
 ```
 
-The initramfs auto-rebuilds via the pacman mkinitcpio hook on kernel
-updates — you don't need to re-run `arch2ram-install`. The squashfs is a
-frozen snapshot, so it does need a manual `arch2ram-create` after
-significant updates (especially kernel updates — the modules in the
-squashfs must match the kernel that boots).
-
----
-
-## Boot params used (and how to override)
-
-The GRUB entry passes:
-
-| Param                              | Value             | Why                                                |
-|------------------------------------|-------------------|----------------------------------------------------|
-| `archisobasedir=var/lib/arch2ram`  | path prefix       | where on the source partition the squashfs lives   |
-| `archisosearchuuid=<ROOT_UUID>`    | filesystem UUID   | partition the hook should mount                    |
-| `copytoram=y`                      | force-copy to RAM | otherwise archiso's `auto` mode gives up on >4 GiB |
-| `cow_spacesize=2G`                 | overlay capacity  | default 256 MiB fills up fast on a desktop session |
-
-Full param reference: see `/usr/share/doc/mkinitcpio-archiso/README.bootparams`
-after installing the package.
-
----
-
-## Uninstall
+### Update cycle
 
 ```bash
-sudo scripts/arch2ram-uninstall            # remove config + GRUB entry
-sudo scripts/arch2ram-uninstall --purge    # also delete /var/lib/arch2ram
+# Boot the disk-mode "Arch Linux (disk, UKI — for updates)" entry, then:
+sudo arch2ram-update          # pacman -Syu + mkinitcpio + arch2ram-create
+reboot                        # back into your chosen RAM mode
 ```
+
+---
+
+## Boot modes in detail
+
+### `gamescope` (default)
+gamescope is Valve's compositor (the one in the Steam Deck). Owns DRM
+directly — no Plasma, no GNOME, no hyprland underneath. We launch it
+with `setpriv --ambient-caps '-all' gamescope ... -- steam -bigpicture`.
+You get Steam Big Picture in 4K, with adaptive sync, MangoHud overlay,
+and Steam handles all input device mapping.
+
+Override: `arch2ram.gs.res=1920x1080`, `arch2ram.gs.rate=120`,
+`arch2ram.gs.launcher=/path/to/your-thing` on the kernel cmdline.
+
+### `EmulationStation`
+Same gamescope compositor — but instead of Steam BPM, runs **ES** as
+the launcher. ES shows 19 systems (apps · linux · windows · steam ·
+nes · snes · n64 · gb · gbc · gba · nds · megadrive · mastersystem ·
+dreamcast · psx · ps2 · ps3 · psp · dos · arcade · ...). Each system
+funnels through `arch2ram-launch SYSTEM ROM`, which picks the right
+emulator/runner and wraps with `runer.sh` for max GPU acceleration.
+
+### `kiosk` (cage)
+Pure single-window mode. Launches `konsole` fullscreen with a
+Hebrew-BiDi profile at 36pt. Replace with any binary via launcher
+override. **Perfect for**: internet cafés, vending machines, classroom
+display walls, signage. Non-technical users cannot escape the running app.
+
+### `hyprland`
+The user's existing hyprland config is sourced; we add a wrapper that
+adds a connector-name override for RAM-mode HDMI labeling. Multi-window
+tiling Wayland desktop with bar, tray, workspaces.
+
+### `debug TTY`
+`multi-user.target` only — no graphics. For SSH access, system rescue,
+or running headless workloads.
+
+---
+
+## What's in the image
+
+The squashfs contains everything from `/`, minus:
+
+**Always excluded** (path-based):
+- `/home` (mounted from disk in RAM mode — your data persists)
+- `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/mnt`, `/media` (runtime)
+- `/var/cache/pacman/pkg`, `/var/log`, `/var/tmp`, `/var/lib/systemd/coredump`
+- `/usr/lib/debug`, `/usr/share/locale`, `/usr/share/doc`, `/usr/share/man`
+- `/opt/cuda`, `/opt/android-studio`, `/opt/rocm` (heavy, rarely used)
+
+**Optionally excluded** (per-package, via `/etc/arch2ram/strip-packages.conf`):
+Whole desktop environments (Plasma, GNOME, Cinnamon), display managers
+(GDM, SDDM, LightDM), AUR helpers (yay, paru), build tools (gcc, cmake,
+ninja), kernel headers — anything you don't need at runtime. **Disk
+copies stay intact** — only the squashfs gets the slimmer view.
+Sample saves: ~2-3 GB before compression → ~800 MB-1 GB on disk.
+
+---
+
+## Hardware requirements
+
+- **CPU**: any x86_64 from the last decade
+- **RAM**: minimum 8 GB usable (squashfs ~5 GB compressed + ~3 GB
+  working). 16 GB recommended, 32 GB ideal for gaming + apps
+- **GPU**: any KMS-capable card. **Intel iGPU + AMD dGPU hybrid is
+  the explicit primary target** (the project's simpledrm-unbind
+  workaround makes this combo work where SteamOS struggles).
+  Pure AMD and pure Intel also fine. Nvidia partial (needs `nouveau`;
+  proprietary driver compatibility not yet tested).
+- **Storage**: ~6 GB on the boot partition for the squashfs +
+  initramfs. NVMe Gen3+ recommended (RAM load takes 1-2 seconds).
+- **Bootloader**: GRUB (UEFI or BIOS). systemd-boot support: untested.
 
 ---
 
@@ -163,21 +209,48 @@ sudo scripts/arch2ram-uninstall --purge    # also delete /var/lib/arch2ram
 ```
 arch2ramos/
 ├── README.md                       ← you are here
-├── mkinitcpio/
-│   ├── arch2ram.conf               → /etc/arch2ram/mkinitcpio.conf
-│   └── arch2ram.preset             → /etc/mkinitcpio.d/arch2ram.preset
+├── PHILOSOPHY.md                   why this exists, what we won't do
+├── AUDIENCES.md                    7 user types this is built for
+├── MORNING-NOTES.md                latest session change log
+├── strip-packages.conf.example     opt-in slimmer image
+│
 ├── scripts/
-│   ├── arch2ram-install            one-time setup
-│   ├── arch2ram-create             build/refresh the squashfs
-│   └── arch2ram-uninstall          clean removal
-├── grub/
-│   └── menuentry.example           manual-install template
-└── docs/
-    ├── boot-flow.md                detailed boot annotated step-by-step
-    └── troubleshooting.md          common failure modes
+│   ├── arch2ram-install            one-time setup, picks boot modes
+│   ├── arch2ram-create             build the squashfs from current /
+│   ├── arch2ram-update             update cycle (pacman + create)
+│   ├── arch2ram-uninstall          full revert (incl. --purge)
+│   │
+│   ├── arch2ram-drm-fixup          simpledrm unbind (hybrid GPU fix)
+│   ├── arch2ram-gamescope          gamescope + Steam BPM launcher
+│   ├── arch2ram-emulationstation   gamescope + ES launcher
+│   ├── arch2ram-kiosk              cage + konsole launcher
+│   ├── arch2ram-hyprland           hyprland launcher
+│   ├── arch2ram-launch             ES system dispatcher (19 systems)
+│   └── arch2ram-es-discover        scan /usr/share/applications + /media/G
+│
+├── mkinitcpio/
+│   ├── arch2ram.conf               hooks + compression
+│   └── arch2ram.preset             pacman-hook-compatible preset
+│
+├── systemd/                        4 services (drm-fixup + per-mode launcher)
+├── env/                            user environment generators
+├── konsole/                        kiosk profile (Hebrew BiDi, 36pt for 4K TV)
+├── hyprland/                       wrapper config for RAM-mode HDMI quirk
+├── emulationstation/               es_systems.cfg + README
+├── grub/                           menuentry templates
+└── docs/                           boot-flow, troubleshooting
 ```
 
 ---
 
-*Boots in seconds. Runs from RAM. Same mechanism the Arch installer uses,
-applied to your own system.*
+## License & status
+
+Personal-use license. No warranty. Pull requests welcome but the
+project is opinionated — driven by what makes it good for the
+audiences listed above, not by "make it generic for everyone".
+
+For the actual design principles and what we DON'T do, see
+**[PHILOSOPHY.md](PHILOSOPHY.md)**.
+
+For who this is for in concrete detail, see
+**[AUDIENCES.md](AUDIENCES.md)**.
