@@ -1,9 +1,9 @@
 [Unit]
 Description=arch2ramos hyprland desktop compositor
 Documentation=https://wiki.hyprland.org/
-ConditionKernelCommandLine=arch2ram.mode=hyprland
+# ConditionKernelCommandLine=arch2ram.mode=hyprland
 After=systemd-user-sessions.service arch2ram-drm-fixup.service
-Conflicts=getty@tty1.service
+Conflicts=getty@tty1.service arch2ram-gamescope.service arch2ram-emulationstation.service arch2ram-kiosk.service
 After=getty@tty1.service
 
 [Service]

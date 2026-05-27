@@ -1,0 +1,11 @@
+[Unit]
+Description=arch2ramos: pick the right launcher based on kernel cmdline
+After=systemd-user-sessions.service arch2ram-drm-fixup.service multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/arch2ram-boot-mode
+
+[Install]
+WantedBy=multi-user.target

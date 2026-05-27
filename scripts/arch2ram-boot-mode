@@ -1,0 +1,31 @@
+#!/bin/bash
+# arch2ram-boot-mode — read /proc/cmdline, start the matching launcher service.
+#
+# Allowed cmdline values:
+#   arch2ram.mode=gamescope         → arch2ram-gamescope.service
+#   arch2ram.mode=emulationstation  → arch2ram-emulationstation.service
+#   arch2ram.mode=hyprland          → arch2ram-hyprland.service
+#   arch2ram.mode=kiosk             → arch2ram-kiosk.service
+#   (none / unknown)                → arch2ram-emulationstation.service (default)
+#
+# Manual switching at runtime: just `systemctl start arch2ram-X.service` —
+# Conflicts= on each launcher unit stops the currently-running one.
+
+set -e
+
+mode="$(grep -oE 'arch2ram\.mode=[a-z]+' /proc/cmdline | tail -1 | cut -d= -f2)"
+mode="${mode:-emulationstation}"   # default if nothing specified
+
+case "$mode" in
+    gamescope)        target=arch2ram-gamescope.service ;;
+    emulationstation) target=arch2ram-emulationstation.service ;;
+    hyprland)         target=arch2ram-hyprland.service ;;
+    kiosk)            target=arch2ram-kiosk.service ;;
+    *)
+        echo "arch2ram-boot-mode: unknown mode '$mode', falling back to gamescope" >&2
+        target=arch2ram-gamescope.service
+        ;;
+esac
+
+echo "arch2ram-boot-mode: starting $target"
+exec systemctl start --no-block "$target"
