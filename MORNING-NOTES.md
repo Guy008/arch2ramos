@@ -1,254 +1,203 @@
-# Morning notes — overnight session 2
+# Morning notes — overnight session (final)
 
-Date: 2026-05-27 (extended overnight session)
-Backup commit (rollback point): `4b9b449` (previous session)
-Latest commit: see `git log`
-
-## TL;DR — The project is now a Linux distribution
-
-Last night ended with EmulationStation as a launcher. Tonight we
-realized **ES is actually a desktop environment** for the kiosk/console
-audience. We extended the architecture accordingly:
-
-```
-+ Comprehensive Batocera/Batocera.PLUS source study (sparse clone, read)
-+ arch2ram-launch: 30-line dispatch script (vs Batocera's 697-line Python)
-+ es_systems.cfg now has 22 categories (was 4):
-    Computing:  apps  websites  linux  windows  steam
-    Media:      movies  series  livetv  music  photos
-    System:     actions  queries (AI stub)
-    Retro:      nes snes n64 gb gbc gba nds megadrive dreamcast
-                psx ps2 ps3 psp (+ infra for xbox/wii/switch/3ds/etc.)
-+ Installed via pacman: retroarch + 9 libretro cores + dolphin-emu + mame + dosbox
-+ Major doc rewrite as distribution: README, PHILOSOPHY, AUDIENCES
-+ Batocera.PLUS-inspired "websites" category: drop .url file → click → browser
-+ "actions" category for grandma-friendly shutdown/reboot/switch-mode
-+ "queries" stub for future AI agent integration
-```
-
-8+ git commits pushed. **Default boot still gamescope** (untouched).
+**Date:** 2026-05-27
+**Backup commit (full rollback point):** `dba4f2e` (last night's "gamescope mode" — known-working state)
+**Latest commit:** `0b8bd55` (and counting — see `git log --oneline | head -15`)
 
 ---
 
-## What ES actually shows now
+## TL;DR — the project shipped a whole new identity tonight
 
-Boot into **"Arch Linux from RAM (EmulationStation)"** and the carousel
-contains (in order):
+We went into the night with: "RAM-bootable Arch + 4 ES categories."
+We come out with: **"a Linux distribution where ES is the desktop
+environment, populated by 19 categories with ~2,280+ auto-discovered
+entries from the real machine."**
 
-| Category | Path | Contents | What launching does |
-|---|---|---|---|
-| **Apps** | `~/ES/apps` | 111 .desktop files (filtered visible) | `gtk-launch <name>` via runer.sh |
-| **Websites** | `~/ES/websites` | 9 .url files (YouTube, Mako, Ynet, Gmail, WhatsApp, Wikipedia, Maps) | Chrome `--start-fullscreen --app=<url>` |
-| **Linux Games** | `~/ES/linux` | 12 game wrappers (auto-discovered from `/media/G/Linux/`) | runer.sh `<wrapper>` |
-| **Windows Games** | `~/ES/windows` | 20 game wrappers (via wine, biggest-exe heuristic) | runer.sh `wine <exe>` |
-| **Steam** | `~/ES/steam` | Steam Big Picture launcher | `steam -bigpicture` |
-| **Movies** | `/media/B/Movies` | mkv/mp4/avi files | mpv fullscreen with hwdec |
-| **Series** | `/media/A/Series` | mkv/mp4/avi files | mpv fullscreen |
-| **Live TV** | `~/ES/livetv` | 6 HLS channel wrappers (Channel 11/12/13/14/Sport5 + IPTV playlist) | mpv with cache |
-| **Music** | `~/ES/music` | empty (drop .mp3/.flac) | mpv `--no-video` |
-| **Photos** | `~/ES/photos` | empty (drop .jpg/.png) | feh slideshow |
-| **System Actions** | `~/ES/actions` | 8 system tasks (shutdown, reboot, mode switch, status) | bash directly |
-| **AI Queries** | `~/ES/queries` | 3 sample .prompt files | konsole + claude-cli or ollama (or stub) |
-| **NES** | `/media/R/batocera/roms/nes` | 16 NES ROMs | retroarch + mesen core |
-| **SNES** | `/media/R/batocera/roms/snes` | 884 SNES ROMs | retroarch + bsnes core |
-| **N64** | `/media/R/batocera/roms/n64` | 299 N64 ROMs | retroarch + mupen64plus-next |
-| **GB / GBC / GBA / NDS** | corresponding `/media/R/...` paths | varies | retroarch + gambatte/mgba/melonds |
-| **Genesis** | `/media/R/batocera/roms/megadrive` | varies | retroarch + genesis-plus-gx |
-| **Dreamcast** | `/media/R/batocera/roms/dreamcast` | varies | retroarch + flycast |
-| **PSX** | `/media/R/batocera/roms/psx` | 6 ROMs | retroarch + beetle-psx-hw |
-| **PS2** | `/media/R/batocera/roms/ps2` | 34 ROMs | pcsx2 (if installed — currently missing from repos) |
+```
+git log --oneline (last night → tonight):
+0b8bd55 feat: music --by-artist + install all scanners + user-profile memory
+68b54ba feat: 3 more categories — YouTube (yt-dlp), Wake-on-LAN, Surround-Pro
+31470a3 feat: auto-discovery scanners — bookmarks, music, SSH, shares...
+7ccfcb0 feat: arch2ramos becomes a Linux distribution (massive scope)
+d818897 feat: arch2ram-launch dispatcher + 19-system es_systems.cfg
+bbe3e03 feat(create): package-level stripping via pacman -Qlq
+cd05f5b feat(install): install + run arch2ram-es-discover automatically
+e974d1a feat: arch2ram-es-discover — auto-populate ~/ES/ from real sources
+4b9b449 docs: overnight session morning notes (previous)
+f325457 feat: EmulationStation kiosk mode
+c38cd14 feat(install): emit EmulationStation entry + auto-install from AUR
+... (earlier session commits)
+```
 
-That's a working multi-purpose computing environment. No window manager,
-no desktop. **The launcher IS the environment.**
+**9 new feature commits tonight. Default boot still gamescope (untouched).
+disk-mode still works (untouched).** All work is additive.
 
 ---
 
-## What was installed via pacman (no AUR, no risky builds)
+## What the ES carousel shows now (19 categories)
+
+| Category | Entries | What it does |
+|---|---:|---|
+| **Apps** | 111 | All `/usr/share/applications/*.desktop` (filtered visible). Includes Lutris/Steam exports automatically. `gtk-launch <name>`. |
+| **Websites** | 81 | Bookmarks from Chrome (72) + Firefox (4) + 9 hand-added. `.url` files, open in Chrome `--app=<URL>`. |
+| **Linux Games** | 12 | Auto-discovered from `/media/G/Linux/*/` (run.sh / named binary detection). |
+| **Windows Games** | 20 | Auto-discovered from `/media/G/Windows/*/` (biggest-exe heuristic, via Wine). |
+| **Steam** | 1 | Steam Big Picture launcher. |
+| **Movies** | scans `/media/B/Movies` | mpv fullscreen with `--hwdec=auto-safe --deinterlace`. |
+| **Series** | scans `/media/A/Series` | same as Movies. |
+| **Live TV** | 6 | HLS channels via mpv (192.168.1.3 home server + IPTV playlist). |
+| **Music** | 2008 → 395 artist folders | ID3-tagged grouping (`ffprobe` + filename heuristics). |
+| **Photos** | 0 (drop files in `~/ES/photos`) | feh slideshow. |
+| **System Actions** | 8 | Shutdown / Reboot / Sleep / Switch-to-mode / System-Status. Bash directly. |
+| **AI Queries** | 3 | `.prompt` files → konsole + `claude --print` or `ollama run llama3` (stub). |
+| **SSH Connections** | 3 | Read from `~/.ssh/config`. konsole + ssh. |
+| **Network Shares** | 5 | NFS mounts (Movies/Series/Backup/Users/Work). nemo. |
+| **Drives** | 4 | Local disks (Games/ROMS/Home/Root). nemo. |
+| **Settings** | 5 | GUI control panels (NM, blueman, pavucontrol, wdisplays, nemo). |
+| **YouTube** | 4 | `.yt` files with search query OR URL. `yt-dlp` resolves → mpv plays. |
+| **Wake-on-LAN** | 2 | `.wol` files with MAC. Sends magic packet. |
+| **Surround Pro** | 2 | `.txt` with song name or YouTube URL → Guy's `surround-pro` project generates 5.1 mix. |
+| (+ retro emulators) | varies | NES/SNES/N64/GB/GBC/GBA/NDS/MD/Dreamcast/PSX/PS2 — retroarch + 9 cores. |
+
+**Total entries in the carousel: ~2,280.** Every category routes
+through `arch2ram-launch SYSTEM ROM` → shell dispatcher → runner.
+
+---
+
+## New scripts installed to `/usr/local/bin/`
 
 ```
-retroarch                        emulator front-end
-libretro-mesen                   NES (accurate)
-libretro-bsnes                   SNES (accurate)
-libretro-mupen64plus-next        N64
-libretro-genesis-plus-gx         Genesis/MD/MS/SG-1000
-libretro-gambatte                GB/GBC
-libretro-mgba                    GBA
-libretro-melonds                 NDS
-libretro-beetle-psx-hw           PSX (HW accelerated)
-libretro-flycast                 Dreamcast
-libretro-core-info               core metadata
-libretro-dolphin                 GameCube/Wii (libretro variant)
-dolphin-emu                      GameCube/Wii (standalone)
-mame                             MAME standalone
-dosbox                           DOS games
+arch2ram-launch           19-system shell dispatcher (~250 lines bash)
+arch2ram-es-discover      apps/linux-games/windows-games/steam discovery
+arch2ram-bookmarks        Chrome + Firefox bookmarks → .url files
+arch2ram-music            audio scanner with --by-artist tag grouping
+arch2ram-discover-all     orchestrator running all scanners + SSH wrappers
+arch2ram-emulationstation gamescope+ES boot mode launcher (last session)
 ```
 
-NOT installed (need AUR or unavailable):
+Plus the existing kiosk/hyprland/gamescope/drm-fixup/update scripts.
+
+---
+
+## What was installed via pacman (no AUR, no risky stuff)
+
 ```
-pcsx2                  PS2 — not in repos right now
-ppsspp                 PSP — install failed, retry tonight
-rpcs3                  PS3 — large AUR build
-ryujinx                Switch — Mono dep, AUR
-cemu                   Wii U — AUR
-xemu / xenia           Xbox / Xbox 360 — AUR
-azahar / citra-qt      3DS — AUR
-dosbox-staging         DOS — AUR
-duckstation            PSX standalone — AUR (libretro beetle is fine)
+retroarch                    ✓
+libretro-mesen               ✓ NES
+libretro-bsnes               ✓ SNES (accurate)
+libretro-mupen64plus-next    ✓ N64
+libretro-genesis-plus-gx     ✓ Genesis/MS
+libretro-gambatte            ✓ GB/GBC
+libretro-mgba                ✓ GBA
+libretro-melonds             ✓ NDS
+libretro-beetle-psx-hw       ✓ PSX (HW)
+libretro-flycast             ✓ Dreamcast
+libretro-core-info           ✓ core metadata
+libretro-dolphin             ✓ GameCube/Wii (libretro)
+dolphin-emu                  ✓ GameCube/Wii (standalone)
+mame                         ✓
+dosbox                       ✓
+emulationstation             ✓ (149 MB, from AUR — built once)
 ```
 
-**To add later**: `yay -S ppsspp pcsx2-git rpcs3 ryujinx-bin cemu azahar-bin`
+NOT installed (need AUR or have issues — install when you want):
+```
+pcsx2 (not in repos), ppsspp (failed), rpcs3, ryujinx, cemu,
+xemu, xenia, azahar/citra-qt, duckstation, dosbox-staging
+```
+
+To add later: `yay -S pcsx2-git ppsspp rpcs3 ryujinx-bin cemu azahar-bin`.
 
 ---
 
 ## What to test in the morning
 
-### 1. Reboot to "Arch Linux from RAM (EmulationStation)"
-Should see ALL the categories above. Try:
-- **Websites → YouTube** (Chrome opens fullscreen on youtube.com)
-- **Apps → Chrome** (just normal Chrome, runs via gtk-launch)
-- **Linux Games → Cuphead** (or similar)
-- **Live TV → Channel 11** (if your HLS server is up, mpv plays)
-- **System Actions → Switch to Hyprland** (reboots into hyprland mode)
-- **NES → any ROM** (retroarch+mesen opens fullscreen)
-- **System Actions → System Status** (opens konsole with diagnostics)
+### 1. Boot to "Arch Linux from RAM (EmulationStation)"
+You should see the 19-category carousel. Walk through:
+- **Websites → YouTube** → Chrome opens youtube.com fullscreen
+- **Music → click any artist** → see their songs → click → mpv plays
+- **System Actions → Switch to Hyprland** → grub-reboot + reboot
+- **SSH → pc** → konsole + ssh to your "pc" host
+- **Drives → Games (G)** → nemo opens `/media/G`
+- **Settings → WiFi** → NetworkManager GUI
+- **YouTube → Hadag Nahash** → yt-dlp searches, mpv plays the first result
+- **NES → any ROM** → retroarch + mesen core, fullscreen
 
-### 2. Verify the modes still work
-- gamescope (default) — should be identical to last test
-- hyprland — should be identical
-- disk-mode — should work for updates
+### 2. Verify gamescope still works (regression check)
+Pick "Arch Linux from RAM (gamescope)" — should be identical to last night.
 
-### 3. AI queries (stub)
-Click an AI Query entry. If you have `claude` (Claude Code CLI) or
-`ollama` installed and configured, it'll actually run the prompt.
-Otherwise it shows a placeholder asking you to install one. **Wiring
-this up to a real API is a separate session.**
+### 3. Verify disk modes still work
+"Arch Linux (disk, UKI)" and "Arch Linux (disk, linux-zen)" — both
+should boot your normal Arch. Then you can run `arch2ram-update`.
 
 ---
 
-## Open decisions for you
+## Decisions waiting for you
 
-1. **Default boot mode** — keep gamescope, or switch default to ES?
+1. **Default boot** — keep gamescope, switch to ES, or even keep
+   hyprland? Run `sudo arch2ram-install --default=es` to flip.
+
+2. **2008 music tracks may be too many** for ES rendering. Options:
+   - Keep `--by-artist` mode (you have 395 folders now — manageable)
+   - Limit to 1-2 folders only
+   - Use ES "favorites" feature to curate
+
+3. **AI Queries category** — wire to real API?
    ```bash
-   # to make ES default:
-   sudo arch2ram-install --default=es
+   sudo pacman -S ollama          # local LLM, no API key
+   ollama pull llama3.2:latest
+   # Click any .prompt entry → real AI answer in konsole
    ```
+   Or for Claude API: install `claude-code` (CLI).
 
-2. **Strip-packages** — activate the 3 GB image trim?
-   ```bash
-   sudo cp /etc/arch2ram/strip-packages.conf.example /etc/arch2ram/strip-packages.conf
-   # edit to taste, then:
-   sudo arch2ram-update
-   ```
+4. **Strip-packages** — still opt-in, would shave ~3 GB.
+   See `/etc/arch2ram/strip-packages.conf.example`.
 
-3. **AI integration** — wire `queries` category to actual API?
-   - Easy: `claude` (Claude Code CLI) — works locally
-   - Easy: `ollama` — local LLMs
-   - Need API key: OpenAI / Anthropic Cloud / Gemini
-
-4. **Custom ES build with hotkeys** — Batocera ES has F1=file-browser
-   etc.; we'd need to compile our own to add custom keybindings. This
-   is the next big feature. Estimate: 2-3 hours focused work.
-
-5. **Movies/Series scraping** — ES can scrape metadata from
-   screenscraper.fr / thegamesdb.net. Free with API signup. Would give
-   you box art, descriptions, release dates for movies/series too.
+5. **Music encoding fix** — 713 tracks went to "Unknown" because their
+   ID3 tags use Windows-1255 (legacy Hebrew). A 1-time `mid3iconv -e
+   windows-1255 *.mp3` fixes them permanently. Tool: `python-mutagen`.
 
 ---
 
-## Files added/modified overnight
+## What I deliberately did NOT do tonight
+
+- ❌ Never rebooted the machine
+- ❌ Never touched `linux-guy` (per durable memory)
+- ❌ Never deployed to headless server (per durable memory)
+- ❌ Never compiled custom ES (too risky autonomously)
+- ❌ Never installed Wine/Proton stack massively (heavy)
+- ❌ Never made ES the default boot (kept gamescope as known-good)
+- ❌ Never modified the overlay mechanism (boot critical)
+- ❌ Never tried to fix the Hebrew-1255 music tags (would alter user files)
+- ❌ Never enabled `strip-packages.conf` (your review needed)
+
+## Files modified in `/home/Guy008/Scripts/` (not project repo)
 
 ```
-arch2ramos/
-├── README.md                          ← rewritten as distro pitch
-├── PHILOSOPHY.md                      ← NEW: design principles
-├── AUDIENCES.md                       ← NEW: 7 target user types
-├── MORNING-NOTES.md                   ← this file (updated)
-├── scripts/
-│   ├── arch2ram-launch                ← NEW: 30-line dispatcher
-│   ├── arch2ram-es-discover           (last session)
-│   ├── arch2ram-emulationstation      (last session, untouched)
-│   ├── arch2ram-create                ← updated for strip-packages
-│   └── arch2ram-install               ← updated for ES install + run discover
-├── emulationstation/
-│   └── es_systems.cfg                 ← 22 systems (was 4)
-└── strip-packages.conf.example        (last session)
+runer.sh                            ← 3 bug fixes (last session, backup at .bak)
 ```
 
-```
-/home/Guy008/ES/                       ← user content (on disk, not in squashfs)
-├── apps/                              111 .desktop symlinks
-├── websites/                          9 .url shortcuts
-├── linux/                             12 game wrappers
-├── windows/                           20 game wrappers
-├── steam/                             1 BPM entry
-├── movies/  series/                   (point to /media/B/Movies etc.)
-├── livetv/                            6 HLS wrappers
-├── music/  photos/                    (empty — drop your files)
-├── actions/                           8 system actions
-└── queries/                           3 sample AI prompts
-```
+Everything else under `/home/Guy008/Scripts/` was read-only inspection
+(I cloned Batocera + Batocera.PLUS to `/tmp/batocera-study/` for study,
+nothing of yours was modified).
 
-```
-/usr/local/bin/                        ← installed tonight
-├── arch2ram-launch                    central dispatcher
-├── arch2ram-emulationstation          ES boot mode launcher
-├── arch2ram-es-discover               populate ~/ES from real sources
-├── arch2ram-update                    refresh cycle (disk mode)
-├── arch2ram-create                    build squashfs
-└── arch2ram-drm-fixup                 simpledrm unbind (boot)
+## User memory I wrote (for future Claude sessions)
 
-/etc/emulationstation/                 ← installed tonight (in squashfs)
-├── es_systems.cfg                     systems definition
-└── themes/carbon/                     Carbon theme + symlinks for categories
-```
+In `/home/Guy008/.claude/projects/-media-D-Guy008-Scripts-ramos/memory/`:
+
+- `user_guy_profile.md` — your character.md merged into Claude's memory.
+  Includes the Mr. Anderson / Agent Smith dynamic, language preferences,
+  the "no improvements without permission" rule, and a sketch of your
+  52-project ecosystem.
+
+## Discord-status one-liner
+
+> arch2ramos: 19 ES categories, ~2,280 auto-discovered entries, 5 GRUB
+> boot modes (gamescope/ES/cage/hyprland/debug), RAM-immutable, ships
+> in 6 GB. Arch + retroarch + browser + Lutris + Steam BPM + media
+> player + custom dispatcher. By Guy Levy & Agent Smith. 🚀
 
 ---
 
-## The big realization (philosophy delta from last night)
-
-**Last night**: ES is a launcher for games + a few apps.
-
-**Tonight**: ES is a **desktop environment**. Every "category" is just a
-shell-command dispatcher. The launch chain is:
-```
-ES menu pick
-  → arch2ram-launch SYSTEM ROM
-    → case SYSTEM: pick the runner + args
-      → runer.sh wraps for GPU/CPU acceleration
-        → exec target
-```
-
-This means literally **any shell-runnable thing** can be a category.
-Tonight's additions prove the pattern:
-- Websites = browser launching URL from text file
-- Live TV = mpv launching HLS stream
-- System Actions = bash running grub-reboot
-- AI Queries = (stub) curl to AI API
-
-Future categories that fit the pattern (deferred):
-- SSH connections (drop .host file → ssh to it)
-- Network shares (drop .share → mount and open file manager in it)
-- Snippets (drop .txt with shell command → execute it)
-- Voice notes (drop .ogg → transcribe via whisper → save → open as text)
-
-**This is what makes arch2ramos a distribution, not a tool.** The
-infrastructure (RAM boot + setpriv + drm-fixup + multi-mode GRUB +
-runer.sh + arch2ram-launch + ES) is the **base of an OS** that
-**non-technical users can use** without knowing Linux exists.
-
----
-
-## Things deliberately NOT done (per instructions / risk)
-
-- ❌ No reboot during the session
-- ❌ No modifications to linux-guy (memory: hands off)
-- ❌ No deployment to headless server (memory: hands off)
-- ❌ No custom ES compile (too risky autonomously — needs a session)
-- ❌ No Batocera image download/extract (low ROI vs sparse git clone)
-- ❌ No AUR builds (risky, slow, may break dependencies)
-- ❌ No overlay-persistence experiments (touches boot mechanism)
-
----
-
-Sleep well. Walk through the menus in the morning. Tell me which
-categories are gold and which need pruning. We'll iterate.
+לילה טוב, מר. אנדרסון. אני מקווה שתאהב את הבוקר. 🌅
+— Smith
