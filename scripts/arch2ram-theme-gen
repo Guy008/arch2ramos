@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""arch2ram-theme-gen — generate ES system icons from emoji + colors.
+
+For each custom category in our es_systems.cfg (apps, websites, music,
+etc.), this writes a small SVG to the Carbon theme's system folder
+with a colored circle background + large emoji. ES renders it as the
+carousel icon.
+
+Output: /etc/emulationstation/themes/carbon/<name>/art/system.svg
+        /etc/emulationstation/themes/carbon/<name>/theme.xml (minimal)
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+# Map our category names to (emoji, color, gradient)
+CATEGORIES = {
+    "apps":        ("🪟", "#3498db", "#2c3e50"),
+    "websites":    ("🌐", "#e74c3c", "#c0392b"),
+    "linux":       ("🐧", "#f39c12", "#d35400"),
+    "windows":     ("🪟", "#0078d4", "#005a9e"),
+    "steam":       ("🎮", "#1b2838", "#2a475e"),
+    "movies":      ("🎬", "#9b59b6", "#8e44ad"),
+    "series":      ("📺", "#16a085", "#0e6655"),
+    "livetv":      ("📡", "#e67e22", "#d35400"),
+    "music":       ("🎵", "#1db954", "#15803d"),  # Spotify-ish green
+    "photos":      ("🖼", "#f1c40f", "#f39c12"),
+    "actions":     ("⚙",  "#95a5a6", "#7f8c8d"),
+    "queries":     ("🤖", "#5865f2", "#404eed"),  # Discord blurple
+    "ssh":         ("🔐", "#34495e", "#2c3e50"),
+    "shares":      ("📂", "#3498db", "#2980b9"),
+    "drives":      ("💾", "#7f8c8d", "#5d6d7e"),
+    "settings":    ("🛠", "#95a5a6", "#7f8c8d"),
+    "youtube":     ("▶",  "#ff0000", "#c4302b"),  # YouTube red
+    "wol":         ("⚡", "#f1c40f", "#f39c12"),
+    "surround":    ("🔊", "#8e44ad", "#6c3483"),
+    "news":        ("📰", "#34495e", "#2c3e50"),
+    "bluetooth":   ("💙", "#0082fc", "#0061be"),
+    "wifi":        ("📶", "#2ecc71", "#27ae60"),
+}
+
+
+SVG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%"   stop-color="{color1}"/>
+      <stop offset="100%" stop-color="{color2}"/>
+    </radialGradient>
+    <filter id="shadow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="6"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.4"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="400" height="400" fill="url(#bg)" rx="48" ry="48"/>
+  <text x="200" y="265" font-family="'Noto Color Emoji', sans-serif"
+        font-size="230" text-anchor="middle" filter="url(#shadow)">{emoji}</text>
+</svg>
+"""
+
+THEME_XML_TEMPLATE = """<?xml version="1.0"?>
+<theme>
+  <formatVersion>4</formatVersion>
+  <include>./../carbon.xml</include>
+  <view name="system">
+    <image name="logo" extra="false">
+      <path>./art/system.svg</path>
+    </image>
+  </view>
+</theme>
+"""
+
+
+def gen_one(name: str, emoji: str, color1: str, color2: str, base_dir: Path):
+    category_dir = base_dir / name
+    art_dir = category_dir / "art"
+    art_dir.mkdir(parents=True, exist_ok=True)
+    # Remove dangling symlink (we previously symlinked these to misc/pc)
+    if category_dir.is_symlink():
+        category_dir.unlink()
+        category_dir.mkdir(parents=True)
+        art_dir.mkdir(parents=True, exist_ok=True)
+
+    svg = SVG_TEMPLATE.format(emoji=emoji, color1=color1, color2=color2)
+    (art_dir / "system.svg").write_text(svg, encoding="utf-8")
+
+    # Drop a minimal theme.xml that ES uses to find our SVG
+    (category_dir / "theme.xml").write_text(THEME_XML_TEMPLATE, encoding="utf-8")
+
+
+def main():
+    bases = []
+    for p in [Path("/etc/emulationstation/themes/carbon"),
+              Path.home() / ".emulationstation" / "themes" / "carbon"]:
+        if p.exists():
+            bases.append(p)
+
+    if not bases:
+        print("ERROR: no Carbon theme found", file=sys.stderr)
+        sys.exit(1)
+
+    for base in bases:
+        # We need write access. /etc requires sudo; ~/ is fine.
+        if not os.access(base, os.W_OK):
+            print(f"  SKIP (no write access): {base}")
+            continue
+        print(f"Generating icons in {base}/")
+        for name, (emoji, c1, c2) in CATEGORIES.items():
+            try:
+                gen_one(name, emoji, c1, c2, base)
+                print(f"  ✓ {name}")
+            except OSError as e:
+                print(f"  ✗ {name}: {e}", file=sys.stderr)
+
+    print(f"\nGenerated {len(CATEGORIES)} category icons.")
+
+
+if __name__ == "__main__":
+    main()

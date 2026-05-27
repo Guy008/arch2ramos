@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""arch2ram-news — fetch RSS feeds, generate ES .url entries.
+
+Reads ~/.config/arch2ram/news-feeds.txt (one URL per line, # comments OK)
+and creates an .url file in ~/ES/news/ for each story.
+Click → opens article in browser (via dispatcher "websites" path).
+"""
+import os, re, sys, json, urllib.request, xml.etree.ElementTree as ET
+from pathlib import Path
+
+HOME = Path.home()
+ES_NEWS = HOME / "ES" / "news"
+FEEDS_FILE = HOME / ".config/arch2ram/news-feeds.txt"
+
+DEFAULT_FEEDS = [
+    "https://www.ynet.co.il/Integration/StoryRss2.xml",       # Ynet home
+    "https://www.themarker.com/cmlink/1.144",                  # TheMarker
+    "https://www.geektime.co.il/feed",                         # Geektime
+    "https://hothardware.com/rss",                             # Hot Hardware
+    "https://www.phoronix.com/rss.php",                        # Phoronix
+    "https://news.ycombinator.com/rss",                        # HackerNews
+]
+
+def sanitize(s, n=70):
+    s = re.sub(r'[/\0\n\r\t]+', ' ', s).strip()
+    return s[:n].rstrip() if len(s) > n else s
+
+def fetch(url, timeout=10):
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'arch2ram-news/1'})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except Exception as e:
+        print(f"  WARN: {url}: {e}", file=sys.stderr)
+        return None
+
+def parse_rss(content):
+    items = []
+    try:
+        root = ET.fromstring(content)
+        # RSS 2.0
+        for item in root.findall('.//item'):
+            title = item.findtext('title','').strip()
+            link = item.findtext('link','').strip()
+            if title and link: items.append((title, link))
+        # Atom
+        ns = '{http://www.w3.org/2005/Atom}'
+        for entry in root.findall(f'.//{ns}entry'):
+            title = entry.findtext(f'{ns}title','').strip()
+            link_el = entry.find(f'{ns}link')
+            link = link_el.get('href','') if link_el is not None else ''
+            if title and link: items.append((title, link))
+    except ET.ParseError as e:
+        print(f"  WARN: parse error: {e}", file=sys.stderr)
+    return items
+
+def main():
+    ES_NEWS.mkdir(parents=True, exist_ok=True)
+    # Clean previous auto-generated news entries
+    for f in ES_NEWS.glob("news_*.url"):
+        f.unlink()
+
+    if FEEDS_FILE.exists():
+        feeds = [l.strip() for l in FEEDS_FILE.read_text().splitlines()
+                 if l.strip() and not l.startswith('#')]
+    else:
+        FEEDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        FEEDS_FILE.write_text("# arch2ram news feeds — one URL per line\n"
+                              + "\n".join(DEFAULT_FEEDS) + "\n")
+        feeds = DEFAULT_FEEDS
+
+    total = 0
+    for feed_url in feeds:
+        print(f"Fetching {feed_url}")
+        content = fetch(feed_url)
+        if not content: continue
+        items = parse_rss(content)
+        for title, link in items[:10]:  # top 10 per feed
+            name = sanitize(title)
+            if not name: continue
+            fname = ES_NEWS / f"news_{name}.url"
+            i = 0
+            while fname.exists():
+                i += 1
+                fname = ES_NEWS / f"news_{name} ({i}).url"
+            fname.write_text(f"# news: {title}\n{link}\n", encoding="utf-8")
+            total += 1
+    print(f"\n{total} news entries → {ES_NEWS}")
+
+if __name__ == "__main__":
+    main()

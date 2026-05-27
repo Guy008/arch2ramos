@@ -186,31 +186,77 @@ case "$SYSTEM" in
         exec konsole --hold -e bash -c "./surround-pro.sh '$target' && echo '---' && echo 'Done. Output in ./output/'; read -p 'Press enter to close...'"
         ;;
 
-    # ─── AI queries — .prompt files containing a prompt for an AI agent ──────
-    # Format: first non-empty, non-comment line = prompt text.
-    # The wrapper here is a stub — wire it up to an actual API later
-    # (OpenAI, Anthropic Claude, local Ollama, etc.) by editing this case.
+    # ─── AI queries — .prompt files contain a prompt sent to an AI agent ─────
+    # Whole file content is the prompt (comments stripped, blanks collapsed).
+    # Response displayed in konsole; saved next to the .prompt file as .reply.
+    # Tries claude (Anthropic) first, then ollama (local), then a stub.
     ai|queries|chat)
-        prompt="$(grep -vE '^\s*(#|$)' "$ROM" | head -1)"
-        # Use konsole as terminal + a placeholder dialog. Replace with
-        # `claude -p "$prompt"` or `curl https://api.openai.com/...` once
-        # an API client is configured.
-        exec "$RUNER" konsole --hold -e bash -c "
-            echo 'AI Query: $prompt'
-            echo ''
-            if command -v claude &>/dev/null; then
-                echo \"---\"
-                claude --print \"\$@\"
-            elif command -v ollama &>/dev/null; then
-                echo \"---\"
-                ollama run llama3 \"\$@\"
-            else
-                echo 'No AI agent configured. Install claude-code or ollama.'
-                echo ''
-                echo 'Prompt would be: $prompt'
-                read -p 'Press enter to close...'
-            fi
-        " bash "$prompt"
+        # Read prompt: strip "# ..." comments and empty lines
+        prompt="$(grep -vE '^\s*#' "$ROM" | sed '/^[[:space:]]*$/d')"
+        [[ -z "$prompt" ]] && { echo "ERROR: empty prompt in $ROM"; exit 2; }
+
+        # Where to save the response
+        reply_file="${ROM%.prompt}.reply"
+        ts="$(date '+%Y-%m-%d %H:%M:%S')"
+
+        # Pick provider
+        if command -v /home/Guy008/.local/bin/claude &>/dev/null; then
+            ai_cmd="/home/Guy008/.local/bin/claude -p --bare"
+            ai_name="Claude (claude-code CLI)"
+        elif command -v claude &>/dev/null; then
+            ai_cmd="claude -p"
+            ai_name="Claude (claude-code CLI)"
+        elif command -v ollama &>/dev/null; then
+            # Pick a small model that might be installed
+            for model in llama3.2 llama3 mistral phi3; do
+                if ollama list 2>/dev/null | grep -q "^$model"; then
+                    ai_cmd="ollama run $model"
+                    ai_name="Ollama: $model"
+                    break
+                fi
+            done
+            : "${ai_cmd:=ollama run llama3.2}"
+            : "${ai_name:=Ollama (default model)}"
+        else
+            ai_cmd=""
+        fi
+
+        if [[ -z "$ai_cmd" ]]; then
+            # No agent installed — open konsole with install instructions
+            exec konsole --hold -e bash -c "
+echo 'ERROR: no AI agent installed.'
+echo ''
+echo 'To enable AI Queries category, install one of:'
+echo '  yay -S claude-code         # Anthropic Claude (subscription)'
+echo '  sudo pacman -S ollama      # Local LLM, no subscription'
+echo '  ollama pull llama3.2       # (small, fast, ~2GB)'
+echo ''
+echo 'Then re-launch this entry.'
+read -p 'Press enter to close...'
+"
+        fi
+
+        # Run the AI in konsole, save reply, keep window open to see result
+        exec konsole --hold -e bash -c "
+echo '═══════════════════════════════════════'
+echo '  AI Query  ·  ${ai_name}'
+echo '  Prompt file: $(basename "$ROM")'
+echo '  Time: $ts'
+echo '═══════════════════════════════════════'
+echo ''
+echo '── PROMPT ──'
+echo \"$prompt\"
+echo ''
+echo '── RESPONSE ──'
+echo ''
+# Run + tee to reply file
+echo \"$prompt\" | $ai_cmd 2>&1 | tee '$reply_file'
+echo ''
+echo '═══════════════════════════════════════'
+echo '  Reply saved to: $(basename "$reply_file")'
+echo '═══════════════════════════════════════'
+read -p 'Press enter to close...'
+"
         ;;
 
     # ─── Nintendo: NES / SNES / N64 / GB / GBC / GBA / NDS ────────────────────
@@ -299,8 +345,8 @@ case "$SYSTEM" in
         fi
         ;;
     psp)
-        if command -v ppsspp-qt &>/dev/null; then
-            exec "$RUNER" ppsspp-qt -fullscreen "$ROM"
+        if command -v PPSSPPQt &>/dev/null; then
+            exec "$RUNER" PPSSPPQt -fullscreen "$ROM"
         else
             exec "$RUNER" retroarch -L "$(core ppsspp)" "$ROM"
         fi
