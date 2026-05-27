@@ -1,0 +1,161 @@
+#!/bin/bash
+# arch2ram-settings -- single-file key/value store for arch2ramos.
+#
+# Inspired by Batocera's batocera-settings tools (theirs is C / ELF for
+# speed -- ours is bash because settings reads are not hot-path).
+#
+# Storage: /etc/arch2ram/settings.conf  (flat key=value, # comments)
+#          User override: /home/Guy008/.config/arch2ram/settings.conf
+#                         (read after /etc, overrides win)
+#
+# Usage:
+#   arch2ram-settings get <key>                 print value or exit 1
+#   arch2ram-settings get <key> <default>       print value or default
+#   arch2ram-settings set <key> <value>         write to user config
+#   arch2ram-settings unset <key>               remove from user config
+#   arch2ram-settings list                      print all current keys
+#   arch2ram-settings keys                      print known keys only
+#
+# Keys are namespaced with dots: video.resolution, audio.master, etc.
+
+set -e
+
+SYS_CONF="/etc/arch2ram/settings.conf"
+USER_HOME="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+USER_CONF="$USER_HOME/.config/arch2ram/settings.conf"
+DEFAULTS="/etc/arch2ram/settings.defaults"
+
+ensure_user_conf() {
+    mkdir -p "$(dirname "$USER_CONF")"
+    touch "$USER_CONF"
+}
+
+# Read a key from a file. Strips comments, returns first match.
+read_key_from() {
+    local file="$1" key="$2"
+    [[ -f "$file" ]] || return 1
+    awk -F= -v k="$key" '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        {
+            line_key=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line_key)
+            if (line_key == k) {
+                # join everything after first = (in case value contains =)
+                val=$2
+                for (i=3; i<=NF; i++) val = val "=" $i
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+                # strip surrounding quotes
+                if (substr(val,1,1)=="\"" && substr(val,length(val),1)=="\"") {
+                    val=substr(val,2,length(val)-2)
+                }
+                print val
+                found=1
+                exit
+            }
+        }
+        END { exit (found?0:1) }
+    ' "$file"
+}
+
+get_key() {
+    local argc=$#
+    local key="$1"
+    local default
+    [[ $argc -ge 2 ]] && default="$2"
+    # user overrides system overrides defaults
+    if val=$(read_key_from "$USER_CONF" "$key"); then echo "$val"; return 0; fi
+    if val=$(read_key_from "$SYS_CONF" "$key"); then echo "$val"; return 0; fi
+    if val=$(read_key_from "$DEFAULTS" "$key"); then echo "$val"; return 0; fi
+    if [[ $argc -ge 2 ]]; then
+        echo "$default"
+        return 0
+    fi
+    return 1
+}
+
+set_key() {
+    local key="$1" value="$2"
+    ensure_user_conf
+    local tmp; tmp=$(mktemp)
+    # rewrite without the key, then append the new value
+    awk -F= -v k="$key" '
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*$/ { print; next }
+        {
+            line_key=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line_key)
+            if (line_key != k) print
+        }
+    ' "$USER_CONF" > "$tmp"
+    echo "${key}=${value}" >> "$tmp"
+    mv "$tmp" "$USER_CONF"
+}
+
+unset_key() {
+    local key="$1"
+    [[ -f "$USER_CONF" ]] || return 0
+    local tmp; tmp=$(mktemp)
+    awk -F= -v k="$key" '
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*$/ { print; next }
+        {
+            line_key=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line_key)
+            if (line_key != k) print
+        }
+    ' "$USER_CONF" > "$tmp"
+    mv "$tmp" "$USER_CONF"
+}
+
+list_keys() {
+    # Aggregate keys from all sources, last-write-wins.
+    declare -A seen
+    for src in "$DEFAULTS" "$SYS_CONF" "$USER_CONF"; do
+        [[ -f "$src" ]] || continue
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${line// }" ]] && continue
+            key="${line%%=*}"
+            val="${line#*=}"
+            key="${key#"${key%%[![:space:]]*}"}"   # ltrim
+            key="${key%"${key##*[![:space:]]}"}"   # rtrim
+            seen["$key"]="$val"
+        done < "$src"
+    done
+    for k in "${!seen[@]}"; do
+        printf '%s=%s\n' "$k" "${seen[$k]}"
+    done | sort
+}
+
+case "${1:-}" in
+    get)
+        shift
+        get_key "$@"
+        ;;
+    set)
+        [[ $# -ge 3 ]] || { echo "usage: arch2ram-settings set <key> <value>" >&2; exit 64; }
+        set_key "$2" "$3"
+        ;;
+    unset)
+        [[ $# -ge 2 ]] || { echo "usage: arch2ram-settings unset <key>" >&2; exit 64; }
+        unset_key "$2"
+        ;;
+    list)
+        list_keys
+        ;;
+    keys)
+        list_keys | cut -d= -f1
+        ;;
+    *)
+        cat <<EOF >&2
+usage: arch2ram-settings <command> [args]
+  get <key> [default]    print value or default (exit 1 if neither)
+  set <key> <value>      write to user config
+  unset <key>            remove from user config
+  list                   print all key=value pairs (sorted)
+  keys                   print all known keys
+EOF
+        exit 64
+        ;;
+esac

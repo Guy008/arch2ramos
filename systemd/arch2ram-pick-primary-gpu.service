@@ -1,0 +1,13 @@
+[Unit]
+Description=arch2ramos: pick the GPU with a connected display as primary
+Documentation=https://github.com/Guy008/arch2ramos
+After=systemd-udev-settle.service
+Before=arch2ram-drm-fixup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/arch2ram-pick-primary-gpu
+
+[Install]
+WantedBy=multi-user.target

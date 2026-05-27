@@ -56,6 +56,12 @@ TH_OVERRIDE_SRC="${PROJECT_DIR}/systemd/triggerhappy.service.d/override.conf"
 DALTFN_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-disablealtfn"
 DALTFN_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-disablealtfn.service"
 
+# Sprint 3: system services (pick-primary-gpu, settings)
+PRIMGPU_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-pick-primary-gpu"
+PRIMGPU_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-pick-primary-gpu.service"
+SETTINGS_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-settings"
+SETTINGS_DEFAULTS_SRC="${PROJECT_DIR}/etc-arch2ram/settings.defaults"
+
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -97,6 +103,12 @@ TH_OVERRIDE_DST="/etc/systemd/system/triggerhappy.service.d/override.conf"
 # Sprint 2 destinations
 DALTFN_SCRIPT_DST="/usr/local/bin/arch2ram-disablealtfn"
 DALTFN_UNIT_DST="/etc/systemd/system/arch2ram-disablealtfn.service"
+
+# Sprint 3 destinations
+PRIMGPU_SCRIPT_DST="/usr/local/bin/arch2ram-pick-primary-gpu"
+PRIMGPU_UNIT_DST="/etc/systemd/system/arch2ram-pick-primary-gpu.service"
+SETTINGS_SCRIPT_DST="/usr/local/bin/arch2ram-settings"
+SETTINGS_DEFAULTS_DST="/etc/arch2ram/settings.defaults"
 
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
@@ -278,6 +290,14 @@ install -Dm755 "$DALTFN_SCRIPT_SRC" "$DALTFN_SCRIPT_DST"
 install -Dm644 "$DALTFN_UNIT_SRC"   "$DALTFN_UNIT_DST"
 systemctl enable arch2ram-disablealtfn.service >/dev/null 2>&1 || true
 echo "      kiosk-lockdown: arch2ram-disablealtfn (RAM-mode only)"
+
+# System services (Sprint 3): pick-primary-gpu + settings tool + defaults.
+install -Dm755 "$PRIMGPU_SCRIPT_SRC"   "$PRIMGPU_SCRIPT_DST"
+install -Dm644 "$PRIMGPU_UNIT_SRC"     "$PRIMGPU_UNIT_DST"
+install -Dm755 "$SETTINGS_SCRIPT_SRC"  "$SETTINGS_SCRIPT_DST"
+install -Dm644 "$SETTINGS_DEFAULTS_SRC" "$SETTINGS_DEFAULTS_DST"
+systemctl enable arch2ram-pick-primary-gpu.service >/dev/null 2>&1 || true
+echo "      services: pick-primary-gpu (multi-GPU select) + arch2ram-settings"
 
 # Kiosk (cage)
 if (( WANT_KIOSK )); then

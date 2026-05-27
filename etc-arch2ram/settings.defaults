@@ -1,0 +1,42 @@
+# arch2ramos default settings -- shipped read-only at /etc/arch2ram/settings.defaults
+# /etc/arch2ram/settings.conf overrides these (system-wide).
+# ~/.config/arch2ram/settings.conf overrides /etc (per-user).
+# Keys are namespaced with dots. Values are unquoted unless they need to be.
+
+# --- Versioning ---
+version=0.3
+release.name=arch2ramos
+release.codename=Smith
+
+# --- Boot defaults ---
+boot.default-mode=emulationstation
+boot.altfn-disabled=auto
+boot.copytoram=yes
+
+# --- Display ---
+video.resolution=auto
+video.refresh-rate=auto
+video.adaptive-sync=yes
+video.mangohud=yes
+
+# --- Audio ---
+audio.master-volume=80
+audio.muted=no
+
+# --- Input ---
+input.keyboard.layouts=us,il
+input.keyboard.toggle=alt_shift_toggle
+input.mouse.hide-on-idle=no
+
+# --- Locale ---
+locale.lang=he_IL.UTF-8
+locale.lc-ctype=he_IL.UTF-8
+locale.timezone=Asia/Jerusalem
+
+# --- Network ---
+network.wifi-auto=yes
+network.wol=yes
+
+# --- Splash / UX ---
+splash.screen.enabled=yes
+splash.theme=arch2ramos
