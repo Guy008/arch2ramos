@@ -1,11 +1,12 @@
 #!/bin/bash
 # arch2ram-install — set up Arch Linux to boot from RAM via archiso hooks
 #
-# Installs up to four boot modes (added to GRUB based on what's available):
-#   1. Arch Linux from RAM (gamescope) — gamescope + Steam Big Picture (default)
-#   2. Arch Linux from RAM (kiosk)     — cage compositor, single fullscreen app
-#   3. Arch Linux from RAM (hyprland)  — multi-window desktop (if hyprland installed)
-#   4. Arch Linux from RAM (debug TTY) — multi-user.target only, ssh/diagnostics
+# Installs up to five boot modes (added to GRUB based on what's available):
+#   1. Arch Linux from RAM (gamescope)        — gamescope + Steam BPM (default)
+#   2. Arch Linux from RAM (EmulationStation) — gamescope + ES launcher
+#   3. Arch Linux from RAM (kiosk)            — cage compositor, single app
+#   4. Arch Linux from RAM (hyprland)         — multi-window desktop
+#   5. Arch Linux from RAM (debug TTY)        — multi-user.target only, ssh
 #
 # All modes share:
 #   - the same squashfs root (built by arch2ram-create)
@@ -13,10 +14,12 @@
 #   - inherited kernel cmdline (GPU tuning, mitigations, nvme, etc.)
 #
 # Usage:
-#   sudo arch2ram-install                 (full install — gamescope as default)
-#   sudo arch2ram-install --no-gamescope  (skip gamescope install + entry)
-#   sudo arch2ram-install --no-kiosk      (skip cage install + kiosk entry)
-#   sudo arch2ram-install --no-hyprland   (don't add hyprland entry even if installed)
+#   sudo arch2ram-install                        (full install — gamescope default)
+#   sudo arch2ram-install --no-gamescope         (skip gamescope install + entry)
+#   sudo arch2ram-install --no-emulationstation  (skip ES install + entry)
+#   sudo arch2ram-install --no-kiosk             (skip cage install + kiosk entry)
+#   sudo arch2ram-install --no-hyprland          (skip hyprland entry)
+#   sudo arch2ram-install --default=MODE         (gamescope|es|kiosk|hyprland|debug)
 
 set -e
 
@@ -30,13 +33,16 @@ DRM_FIXUP_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-drm-fixup"
 KIOSK_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-kiosk"
 HYPRLAND_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-hyprland"
 GAMESCOPE_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-gamescope"
+ES_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-emulationstation"
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
 GAMESCOPE_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-gamescope.service"
+ES_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-emulationstation.service"
 DRM_ENVGEN_SRC="${PROJECT_DIR}/env/10-arch2ram-drm"
 KONSOLE_PROFILE_SRC="${PROJECT_DIR}/konsole/arch2ram-kiosk.profile"
 HYPRLAND_CONF_SRC="${PROJECT_DIR}/hyprland/hyprland-ram.conf"
+ES_CONF_SRC="${PROJECT_DIR}/emulationstation/es_systems.cfg"
 
 # Install destinations
 CONF_DST="/etc/arch2ram/mkinitcpio.conf"
@@ -47,13 +53,16 @@ DRM_FIXUP_SCRIPT_DST="/usr/local/bin/arch2ram-drm-fixup"
 KIOSK_SCRIPT_DST="/usr/local/bin/arch2ram-kiosk"
 HYPRLAND_SCRIPT_DST="/usr/local/bin/arch2ram-hyprland"
 GAMESCOPE_SCRIPT_DST="/usr/local/bin/arch2ram-gamescope"
+ES_SCRIPT_DST="/usr/local/bin/arch2ram-emulationstation"
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
 HYPRLAND_UNIT_DST="/etc/systemd/system/arch2ram-hyprland.service"
 GAMESCOPE_UNIT_DST="/etc/systemd/system/arch2ram-gamescope.service"
+ES_UNIT_DST="/etc/systemd/system/arch2ram-emulationstation.service"
 DRM_ENVGEN_DST="/etc/systemd/user-environment-generators/10-arch2ram-drm"
 KONSOLE_PROFILE_DST="/usr/share/konsole/arch2ram-kiosk.profile"
 HYPRLAND_CONF_DST="/etc/arch2ram/hyprland-ram.conf"
+ES_CONF_DST="/etc/emulationstation/es_systems.cfg"
 
 # Also install arch2ram-update + arch2ram-create as system commands so the
 # disk-mode update cycle ("sudo arch2ram-update") works from anywhere.
@@ -71,6 +80,7 @@ fi
 
 # Mode labels (used both for entry creation and for cleanup of older versions)
 LABEL_GAMESCOPE="Arch Linux from RAM (gamescope)"
+LABEL_ES="Arch Linux from RAM (EmulationStation)"
 LABEL_KIOSK="Arch Linux from RAM (kiosk)"
 LABEL_HYPRLAND="Arch Linux from RAM (hyprland)"
 LABEL_DEBUG="Arch Linux from RAM (debug TTY)"
@@ -78,16 +88,19 @@ LABEL_LEGACY="Arch Linux from RAM"   # old single-entry name, scrubbed if found
 
 # Parse flags
 WANT_GAMESCOPE=1
+WANT_ES=auto         # 1=force install ES from AUR, 0=skip, auto=enable iff ES is installed
 WANT_KIOSK=1
-WANT_HYPRLAND=auto    # 1=force, 0=skip, auto=enable iff hyprland is installed
+WANT_HYPRLAND=auto   # 1=force, 0=skip, auto=enable iff hyprland is installed
 DEFAULT_MODE=gamescope    # which entry to put first (becomes GRUB default)
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-gamescope)  WANT_GAMESCOPE=0; [[ "$DEFAULT_MODE" == "gamescope" ]] && DEFAULT_MODE=kiosk ;;
-        --no-kiosk)      WANT_KIOSK=0; [[ "$DEFAULT_MODE" == "kiosk" ]] && DEFAULT_MODE=hyprland ;;
-        --no-hyprland)   WANT_HYPRLAND=0 ;;
-        --with-hyprland) WANT_HYPRLAND=1 ;;
-        --default=*)     DEFAULT_MODE="${1#*=}" ;;
+        --no-gamescope)         WANT_GAMESCOPE=0; [[ "$DEFAULT_MODE" == "gamescope" ]] && DEFAULT_MODE=kiosk ;;
+        --no-emulationstation)  WANT_ES=0 ;;
+        --with-emulationstation) WANT_ES=1 ;;
+        --no-kiosk)             WANT_KIOSK=0; [[ "$DEFAULT_MODE" == "kiosk" ]] && DEFAULT_MODE=hyprland ;;
+        --no-hyprland)          WANT_HYPRLAND=0 ;;
+        --with-hyprland)        WANT_HYPRLAND=1 ;;
+        --default=*)            DEFAULT_MODE="${1#*=}" ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's|^# \?||'
             exit 0
@@ -153,6 +166,28 @@ case "$WANT_HYPRLAND" in
     0) HAS_HYPRLAND=0 ;;
 esac
 
+# Decide on EmulationStation mode availability
+HAS_ES=0
+case "$WANT_ES" in
+    1)
+        if ! pacman -Q emulationstation &>/dev/null; then
+            echo "      installing emulationstation from AUR (--with-emulationstation)..."
+            if command -v yay &>/dev/null; then
+                # Drop privs to user — yay refuses to run as root
+                sudo -u "${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}" yay -S --needed --noconfirm --answerdiff=None --answerclean=None --removemake emulationstation
+            else
+                echo "      WARNING: yay not installed — cannot install ES automatically. Skipping."
+                WANT_ES=0
+            fi
+        fi
+        pacman -Q emulationstation &>/dev/null && HAS_ES=1
+        ;;
+    auto)
+        pacman -Q emulationstation &>/dev/null && HAS_ES=1
+        ;;
+    0) HAS_ES=0 ;;
+esac
+
 # ── 2. Install mkinitcpio config + preset ────────────────────────────────────
 
 echo "[2/6] Installing mkinitcpio config + preset..."
@@ -197,6 +232,33 @@ if (( WANT_GAMESCOPE )); then
     install -Dm644 "$GAMESCOPE_UNIT_SRC"   "$GAMESCOPE_UNIT_DST"
     systemctl enable arch2ram-gamescope.service >/dev/null 2>&1 || true
     echo "      gamescope: script + service (Steam Big Picture launcher)"
+fi
+
+# EmulationStation (gamescope + ES launcher with category-based systems)
+if (( HAS_ES )); then
+    install -Dm755 "$ES_SCRIPT_SRC" "$ES_SCRIPT_DST"
+    install -Dm644 "$ES_UNIT_SRC"   "$ES_UNIT_DST"
+    install -Dm644 "$ES_CONF_SRC"   "$ES_CONF_DST"
+    systemctl enable arch2ram-emulationstation.service >/dev/null 2>&1 || true
+    echo "      emulationstation: script + service + es_systems.cfg"
+    # Ensure the /home/$USER/ES/ tree exists with at least sample wrappers,
+    # so ES has something to show on first launch. Don't overwrite existing.
+    user="${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    for cat in games apps tools; do
+        sudo -u "$user" mkdir -p "$home/ES/$cat"
+    done
+    # Drop a "Hello" placeholder in apps if it's empty (so ES has SOMETHING)
+    if [[ -z "$(ls -A "$home/ES/apps" 2>/dev/null)" ]]; then
+        sudo -u "$user" tee "$home/ES/apps/welcome.sh" >/dev/null <<'WELCOMEEOF'
+#!/bin/bash
+exec /usr/bin/konsole --hold -e 'echo "Welcome to arch2ramos. Add wrappers to ~/ES/{games,apps,tools}/"; read'
+WELCOMEEOF
+        sudo -u "$user" chmod +x "$home/ES/apps/welcome.sh"
+    fi
+    echo "      emulationstation: ensured $home/ES/{games,apps,tools}/ exists"
+else
+    echo "      emulationstation: skipped (not installed)"
 fi
 
 # arch2ram-update (used from disk-mode for the refresh cycle) +
@@ -285,6 +347,11 @@ emit_mode() {
             NEW_ENTRIES+="$(emit_entry "$LABEL_GAMESCOPE" "systemd.unit=multi-user.target arch2ram.mode=gamescope")"$'\n'
             LABELS_TO_REPLACE+=("$LABEL_GAMESCOPE")
             ;;
+        es|emulationstation)
+            (( HAS_ES )) || return 0
+            NEW_ENTRIES+="$(emit_entry "$LABEL_ES" "systemd.unit=multi-user.target arch2ram.mode=emulationstation")"$'\n'
+            LABELS_TO_REPLACE+=("$LABEL_ES")
+            ;;
         kiosk)
             (( WANT_KIOSK )) || return 0
             NEW_ENTRIES+="$(emit_entry "$LABEL_KIOSK" "systemd.unit=multi-user.target arch2ram.mode=kiosk")"$'\n'
@@ -300,8 +367,9 @@ emit_mode() {
 
 # Default mode first (becomes GRUB index 0), then the rest in canonical order.
 emit_mode "$DEFAULT_MODE"
-for m in gamescope kiosk hyprland; do
+for m in gamescope es kiosk hyprland; do
     [[ "$m" == "$DEFAULT_MODE" ]] && continue
+    [[ "es" == "$DEFAULT_MODE" && "$m" == "es" ]] && continue
     emit_mode "$m"
 done
 NEW_ENTRIES+="$(emit_entry "$LABEL_DEBUG" "systemd.unit=multi-user.target")"$'\n'
@@ -310,7 +378,7 @@ echo "[5/6] Writing GRUB entries to $GRUB_CUSTOM..."
 echo "      boot UUID:    $BOOT_UUID  (source: $BOOT_SRC)"
 echo "      root UUID:    $ROOT_UUID"
 echo "      kernel path:  $KERNEL_PATH"
-echo "      modes:        gamescope=$WANT_GAMESCOPE kiosk=$WANT_KIOSK hyprland=$HAS_HYPRLAND debug=1"
+echo "      modes:        gamescope=$WANT_GAMESCOPE es=$HAS_ES kiosk=$WANT_KIOSK hyprland=$HAS_HYPRLAND debug=1"
 echo "      default:      $DEFAULT_MODE"
 
 # Rewrite custom file: keep header + entries with labels not in our managed set,
@@ -349,6 +417,7 @@ echo "=== Done ==="
 echo ""
 echo "Boot modes installed:"
 (( WANT_GAMESCOPE )) && echo "  • $LABEL_GAMESCOPE (gamescope + Steam Big Picture)"
+(( HAS_ES ))         && echo "  • $LABEL_ES (gamescope + EmulationStation)"
 (( WANT_KIOSK ))     && echo "  • $LABEL_KIOSK   (cage, single fullscreen app)"
 (( HAS_HYPRLAND ))   && echo "  • $LABEL_HYPRLAND (multi-window desktop)"
 echo "  • $LABEL_DEBUG (tty only, ssh/diagnostics)"
