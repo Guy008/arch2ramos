@@ -35,6 +35,10 @@ HYPRLAND_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-hyprland"
 GAMESCOPE_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-gamescope"
 ES_SCRIPT_SRC="${PROJECT_DIR}/scripts/arch2ram-emulationstation"
 ES_DISCOVER_SRC="${PROJECT_DIR}/scripts/arch2ram-es-discover"
+ES_LAUNCH_SRC="${PROJECT_DIR}/scripts/arch2ram-launch"
+ES_BOOKMARKS_SRC="${PROJECT_DIR}/scripts/arch2ram-bookmarks"
+ES_MUSIC_SRC="${PROJECT_DIR}/scripts/arch2ram-music"
+ES_DISCOVER_ALL_SRC="${PROJECT_DIR}/scripts/arch2ram-discover-all"
 DRM_FIXUP_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-drm-fixup.service"
 KIOSK_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-kiosk.service"
 HYPRLAND_UNIT_SRC="${PROJECT_DIR}/systemd/arch2ram-hyprland.service"
@@ -56,6 +60,10 @@ HYPRLAND_SCRIPT_DST="/usr/local/bin/arch2ram-hyprland"
 GAMESCOPE_SCRIPT_DST="/usr/local/bin/arch2ram-gamescope"
 ES_SCRIPT_DST="/usr/local/bin/arch2ram-emulationstation"
 ES_DISCOVER_DST="/usr/local/bin/arch2ram-es-discover"
+ES_LAUNCH_DST="/usr/local/bin/arch2ram-launch"
+ES_BOOKMARKS_DST="/usr/local/bin/arch2ram-bookmarks"
+ES_MUSIC_DST="/usr/local/bin/arch2ram-music"
+ES_DISCOVER_ALL_DST="/usr/local/bin/arch2ram-discover-all"
 DRM_FIXUP_UNIT_DST="/etc/systemd/system/arch2ram-drm-fixup.service"
 KIOSK_UNIT_DST="/etc/systemd/system/arch2ram-kiosk.service"
 HYPRLAND_UNIT_DST="/etc/systemd/system/arch2ram-hyprland.service"
@@ -238,21 +246,25 @@ fi
 
 # EmulationStation (gamescope + ES launcher with category-based systems)
 if (( HAS_ES )); then
-    install -Dm755 "$ES_SCRIPT_SRC"    "$ES_SCRIPT_DST"
-    install -Dm755 "$ES_DISCOVER_SRC"  "$ES_DISCOVER_DST"
-    install -Dm644 "$ES_UNIT_SRC"      "$ES_UNIT_DST"
-    install -Dm644 "$ES_CONF_SRC"      "$ES_CONF_DST"
+    install -Dm755 "$ES_SCRIPT_SRC"         "$ES_SCRIPT_DST"
+    install -Dm755 "$ES_DISCOVER_SRC"       "$ES_DISCOVER_DST"
+    install -Dm755 "$ES_LAUNCH_SRC"         "$ES_LAUNCH_DST"
+    install -Dm755 "$ES_BOOKMARKS_SRC"      "$ES_BOOKMARKS_DST"
+    install -Dm755 "$ES_MUSIC_SRC"          "$ES_MUSIC_DST"
+    install -Dm755 "$ES_DISCOVER_ALL_SRC"   "$ES_DISCOVER_ALL_DST"
+    install -Dm644 "$ES_UNIT_SRC"           "$ES_UNIT_DST"
+    install -Dm644 "$ES_CONF_SRC"           "$ES_CONF_DST"
     systemctl enable arch2ram-emulationstation.service >/dev/null 2>&1 || true
-    echo "      emulationstation: script + discover + service + es_systems.cfg"
+    echo "      emulationstation: 6 scripts + service + es_systems.cfg"
 
-    # Run the discovery script as the user — it populates ~/ES/ from
-    # /usr/share/applications/, /media/G/Linux/, /media/G/Windows/.
-    # Idempotent — safe to re-run later.
+    # Run the full discovery orchestrator — populates ~/ES/ from many
+    # sources (apps, bookmarks, music, linux/windows games, Steam,
+    # SSH config). Idempotent — safe to re-run.
     user="${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}"
     home="$(getent passwd "$user" | cut -d: -f6)"
-    echo "      emulationstation: running discovery as $user (populates $home/ES/)..."
-    sudo -u "$user" "$ES_DISCOVER_DST" || \
-        echo "      WARNING: discovery had errors — re-run manually: $ES_DISCOVER_DST"
+    echo "      emulationstation: running auto-discovery (populates $home/ES/)..."
+    sudo -u "$user" "$ES_DISCOVER_ALL_DST" || \
+        echo "      WARNING: discovery had errors — re-run manually: arch2ram-discover-all"
 else
     echo "      emulationstation: skipped (not installed)"
 fi

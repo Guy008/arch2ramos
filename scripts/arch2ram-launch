@@ -146,6 +146,46 @@ case "$SYSTEM" in
         exec /bin/bash "$ROM"
         ;;
 
+    # ─── YouTube — .yt files contain a search query OR a video URL ────────────
+    # First non-comment line is the query/URL. yt-dlp resolves; mpv plays.
+    youtube|yt)
+        target="$(grep -vE '^\s*(#|$)' "$ROM" | head -1)"
+        [[ -z "$target" ]] && { echo "ERROR: empty $ROM"; exit 2; }
+        if [[ "$target" =~ ^https?:// ]]; then
+            # Direct URL — let mpv+yt-dlp handle it
+            exec "$RUNER" mpv --fs --ytdl-format='bestvideo[height<=2160]+bestaudio/best' "$target"
+        else
+            # Search query — search YouTube via yt-dlp, play first result
+            exec "$RUNER" mpv --fs --ytdl-format='bestvideo[height<=2160]+bestaudio/best' "ytsearch1:$target"
+        fi
+        ;;
+
+    # ─── Wake-on-LAN — .wol files contain a MAC address ───────────────────────
+    wol|wake)
+        mac="$(grep -vE '^\s*(#|$)' "$ROM" | head -1)"
+        [[ -z "$mac" ]] && { echo "ERROR: no MAC in $ROM"; exit 2; }
+        if command -v wol &>/dev/null; then
+            wol "$mac"
+        elif command -v wakeonlan &>/dev/null; then
+            wakeonlan "$mac"
+        else
+            echo "ERROR: install 'wol' or 'wakeonlan'" >&2; exit 2
+        fi
+        # Notify result via notify-send if available
+        command -v notify-send &>/dev/null && notify-send "Wake-on-LAN" "Magic packet sent to $mac"
+        ;;
+
+    # ─── Surround-pro — Guy008's spatial sound project ─────────────────────────
+    # .txt files contain a YouTube URL or song name. Surround-pro generates a
+    # 5-channel-mix MKV in /home/Guy008/Scripts/surround-pro/output/
+    surround|surroundpro)
+        target="$(grep -vE '^\s*(#|$)' "$ROM" | head -1)"
+        [[ -z "$target" ]] && { echo "ERROR: empty $ROM"; exit 2; }
+        cd /home/Guy008/Scripts/surround-pro || exit 2
+        # Run surround-pro in a konsole window so user sees progress
+        exec konsole --hold -e bash -c "./surround-pro.sh '$target' && echo '---' && echo 'Done. Output in ./output/'; read -p 'Press enter to close...'"
+        ;;
+
     # ─── AI queries — .prompt files containing a prompt for an AI agent ──────
     # Format: first non-empty, non-comment line = prompt text.
     # The wrapper here is a stub — wire it up to an actual API later
